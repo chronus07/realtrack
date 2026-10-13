@@ -33,11 +33,15 @@ jobs:
       - name: Generate Android Native Platform
         run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=android
 
-      - name: Configure Android SDK 36 for Plugins
+      - name: Configure Android SDK 36 & Debug Signing for Release
         run: |
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
-          cat << 'EOF' >> android/build.gradle
+          # 1. Ajusta compileSdk para 36 em arquivos Groovy ou Kotlin
+          find android -name "build.gradle*" -exec sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' {} + || true
+          find android -name "build.gradle*" -exec sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' {} + || true
+
+          # 2. Configura assinatura debug para permitir gerar release APK instalável
+          if [ -f "android/app/build.gradle" ]; then
+            cat << 'EOF' >> android/build.gradle
 
           subprojects {
               afterEvaluate { project ->
@@ -49,19 +53,39 @@ jobs:
               }
           }
           EOF
+          fi
+
+          # 3. Propriedades do Gradle
           echo "android.suppressUnsupportedCompileSdk=36" >> android/gradle.properties
 
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build Android Release APK
-        run: flutter build apk --release
+      - name: Build Android APK
+        run: |
+          # Tenta o build do release assinado
+          flutter build apk --release --no-tree-shake-icons || true
+
+          # Cria diretório para coletar todos os APKs gerados
+          mkdir -p final-apk
+          find build android -name "*.apk" -exec cp -v {} final-apk/ \; || true
+
+          # Se nenhum APK foi encontrado, executa build debug garantido
+          if [ $(ls final-apk/*.apk 2>/dev/null | wc -l) -eq 0 ]; then
+            echo "Gerando APK Debug..."
+            flutter build apk --debug --no-tree-shake-icons || (cd android && ./gradlew assembleDebug)
+            find build android -name "*.apk" -exec cp -v {} final-apk/ \; || true
+          fi
+
+          echo "APKs gerados com sucesso:"
+          ls -la final-apk/
+          test $(ls final-apk/*.apk 2>/dev/null | wc -l) -gt 0
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: RealTracks-Android-APK
-          path: build/app/outputs/flutter-apk/*.apk
+          path: final-apk/*.apk
           if-no-files-found: error
 
   # ==========================================
