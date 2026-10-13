@@ -263,9 +263,14 @@ class SupabaseService {
         rawSongs.sort((a, b) => ((a['order_index'] as int?) ?? 0).compareTo((b['order_index'] as int?) ?? 0));
 
         final List<Song> songs = [];
+        final Set<String> seenSongIds = {};
         for (var item in rawSongs) {
           final songData = item['songs'];
           if (songData != null) {
+            final String sId = songData['id'];
+            if (seenSongIds.contains(sId)) continue; // Impede duplicatas 100%
+            seenSongIds.add(sId);
+
             final stemsRaw = songData['song_stems'] as List? ?? [];
             final List<StemTrack> stems = stemsRaw.map<StemTrack>((st) {
               return StemTrack(
@@ -349,6 +354,7 @@ class SupabaseService {
   static Future<bool> deleteSetlistFromCloud(String setlistId) async {
     if (!AppConfig.isConfigured) return false;
     try {
+      await client.from('setlist_songs').delete().eq('setlist_id', setlistId);
       await client.from('setlists').delete().eq('id', setlistId);
       return true;
     } catch (e) {
@@ -369,9 +375,15 @@ class SupabaseService {
     }
   }
 
+  static bool _isSavingCloud = false;
+
   /// Salva ou sincroniza uma playlist específica e suas músicas no Supabase
   static Future<bool> saveSetlistToCloud(Setlist setlist) async {
     if (!AppConfig.isConfigured) return false;
+    while (_isSavingCloud) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    _isSavingCloud = true;
     try {
       final validSetlistId = isValidUuid(setlist.id) ? setlist.id : generateUuid();
       await client.from('setlists').upsert({
@@ -382,13 +394,15 @@ class SupabaseService {
 
       await client.from('setlist_songs').delete().eq('setlist_id', validSetlistId);
 
-      for (int i = 0; i < setlist.songs.length; i++) {
-        final song = setlist.songs[i];
-        if (isValidUuid(song.id)) {
+      final Set<String> savedSongIds = {};
+      int orderIndex = 1;
+      for (final song in setlist.songs) {
+        if (isValidUuid(song.id) && !savedSongIds.contains(song.id)) {
+          savedSongIds.add(song.id);
           await client.from('setlist_songs').insert({
             'setlist_id': validSetlistId,
             'song_id': song.id,
-            'order_index': i + 1,
+            'order_index': orderIndex++,
             'custom_key': song.currentKey,
             'pitch_offset': song.pitchOffsetSemitones,
           });
@@ -398,6 +412,8 @@ class SupabaseService {
     } catch (e) {
       debugPrint('Erro ao salvar playlist no Supabase: $e');
       return false;
+    } finally {
+      _isSavingCloud = false;
     }
   }
 }

@@ -79,7 +79,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (current != null) {
         if (!current.songs.any((s) => s.id == song.id)) {
           engine.addSongToCurrentSetlist(song);
-          SupabaseService.saveSetlistToCloud(current);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('"${song.title}" adicionada à playlist "${current.title}"!'),
@@ -146,7 +145,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 onTap: () {
                   if (!inThis) {
                     engine.addSongToSetlist(s.id, song);
-                    SupabaseService.saveSetlistToCloud(s);
                     Navigator.pop(ctx);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(

@@ -263,6 +263,53 @@ class _SetlistScreenState extends State<SetlistScreen> {
     );
   }
 
+  void _confirmRemoveSongFromSetlist(int index, Song song) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.playlist_remove, color: AppTheme.roseMute, size: 22),
+            SizedBox(width: 8),
+            Text('Tirar da Playlist?', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          'Deseja remover "${song.title}" desta playlist?\n\nℹ️ A música CONTINUARÁ salva e intacta no seu acervo geral da banda.',
+          style: const TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.roseMute,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              final engine = context.read<AudioEngine>();
+              engine.removeSongFromSetlist(index);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Música "${song.title}" removida da playlist (mantida no acervo).'),
+                  backgroundColor: AppTheme.emeraldSafe,
+                  duration: const Duration(seconds: 3),
+                ),
+              );
+            },
+            child: const Text('Tirar da Playlist', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showAddSongsModal(BuildContext context) {
     showModalBottomSheet(
       context: context,
@@ -270,9 +317,6 @@ class _SetlistScreenState extends State<SetlistScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) => _AddSongsBottomSheet(
         onNavigateToUpload: widget.onNavigateToUpload,
-        onSongsAdded: () {
-          _saveSetlistToCloud();
-        },
       ),
     );
   }
@@ -610,7 +654,6 @@ class _SetlistScreenState extends State<SetlistScreen> {
                         itemCount: setlist.songs.length,
                         onReorder: (oldIdx, newIdx) {
                           engine.reorderSetlistSong(oldIdx, newIdx);
-                          _saveSetlistToCloud();
                         },
                         itemBuilder: (context, index) {
                           final song = setlist.songs[index];
@@ -633,7 +676,6 @@ class _SetlistScreenState extends State<SetlistScreen> {
                               ),
                               onDismissed: (_) {
                                 engine.removeSongFromSetlist(index);
-                                _saveSetlistToCloud();
                               },
                               child: GestureDetector(
                                 onTap: () {
@@ -728,7 +770,16 @@ class _SetlistScreenState extends State<SetlistScreen> {
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
+                                      const SizedBox(width: 4),
+                                      // Botão Explícito: Tirar da Playlist (mantém no acervo)
+                                      IconButton(
+                                        icon: const Icon(Icons.playlist_remove, color: Colors.white54, size: 20),
+                                        tooltip: 'Tirar desta playlist (mantém no acervo)',
+                                        visualDensity: VisualDensity.compact,
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        onPressed: () => _confirmRemoveSongFromSetlist(index, song),
+                                      ),
                                       ReorderableDragStartListener(
                                         index: index,
                                         child: const Padding(
@@ -930,7 +981,6 @@ class _AddSongsBottomSheetState extends State<_AddSongsBottomSheet> {
                           .where((s) => _selectedSongIds.contains(s.id))
                           .toList();
                       engine.addMultipleSongsToSetlist(selectedSongs);
-                      widget.onSongsAdded?.call();
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
