@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,6 +8,18 @@ import '../config/app_config.dart';
 import '../models/song.dart';
 import '../models/setlist.dart';
 import '../models/stem_track.dart';
+
+class UploadStemItem {
+  final PlatformFile file;
+  String name;
+  bool isCue; // true = Click/Guia (L), false = Banda (R)
+
+  UploadStemItem({
+    required this.file,
+    required this.name,
+    required this.isCue,
+  });
+}
 
 class SupabaseService {
   static SupabaseClient get client => Supabase.instance.client;
@@ -21,30 +34,23 @@ class SupabaseService {
     }
   }
 
-  /// Busca as setlists da banda na nuvem
-  static Future<List<Setlist>> getBandSetlists(String bandId) async {
+  /// Busca todo o Acervo Geral de Músicas da banda no Supabase
+  static Future<List<Song>> fetchAllLibrarySongs() async {
     if (!AppConfig.isConfigured) return [];
 
-    final response = await client
-        .from('setlists')
-        .select('*, setlist_songs(*, songs(*, song_stems(*)))')
-        .eq('band_id', bandId)
-        .order('event_date', ascending: false);
+    try {
+      final response = await client
+          .from('songs')
+          .select('*, song_stems(*)')
+          .order('title', ascending: true);
 
-    final List<Setlist> list = [];
-    for (var item in response) {
-      final songsRaw = item['setlist_songs'] as List? ?? [];
       final List<Song> songs = [];
-
-      for (var sRaw in songsRaw) {
-        final songData = sRaw['songs'];
-        if (songData == null) continue;
-
-        final stemsRaw = songData['song_stems'] as List? ?? [];
+      for (var row in response) {
+        final stemsRaw = row['song_stems'] as List? ?? [];
         final List<StemTrack> stems = stemsRaw.map<StemTrack>((st) {
           return StemTrack(
-            id: st['id'],
-            name: st['name'],
+            id: st['id'] ?? '',
+            name: st['name'] ?? '',
             isCue: st['is_cue'] ?? false,
             filePath: st['storage_path'],
           );
@@ -52,31 +58,131 @@ class SupabaseService {
 
         songs.add(
           Song(
-            id: songData['id'],
-            title: songData['title'],
-            artist: songData['artist'],
-            originalKey: songData['original_key'],
-            currentKey: sRaw['custom_key'] ?? songData['original_key'],
-            pitchOffsetSemitones: sRaw['pitch_offset'] ?? 0,
-            bpm: songData['bpm'],
-            timeSignature: songData['time_signature'] ?? '4/4',
-            isMultiTrack: songData['is_multitrack'] ?? true,
-            chordsText: songData['chords_text'] ?? '',
+            id: row['id'],
+            title: row['title'],
+            artist: row['artist'] ?? '',
+            originalKey: row['original_key'] ?? 'G',
+            bpm: row['bpm'] ?? 120,
+            timeSignature: row['time_signature'] ?? '4/4',
+            isMultiTrack: row['is_multitrack'] ?? true,
+            chordsText: row['chords_text'] ?? '',
             stems: stems,
           ),
         );
       }
-
-      list.add(
-        Setlist(
-          id: item['id'],
-          title: item['title'],
-          date: DateTime.parse(item['event_date']),
-          songs: songs,
-        ),
-      );
+      return songs;
+    } catch (e) {
+      debugPrint('Erro ao buscar acervo no Supabase: $e');
+      return [];
     }
-    return list;
+  }
+
+  /// Faz o upload de uma nova música e de seus áudios (stems) para o Supabase
+  static Future<Song?> uploadNewSong({
+    required String title,
+    required String artist,
+    required String originalKey,
+    required int bpm,
+    required String timeSignature,
+    required bool isMultiTrack,
+    required String chordsText,
+    required List<UploadStemItem> stemsToUpload,
+    Function(double progress, String status)? onProgress,
+  }) async {
+    if (!AppConfig.isConfigured) {
+      throw Exception('Supabase não configurado');
+    }
+
+    try {
+      onProgress?.call(0.1, 'Salvando metadados da música no acervo...');
+
+      // 1. Inserir a música na tabela `songs`
+      final songInsertResponse = await client.from('songs').insert({
+        'title': title,
+        'artist': artist,
+        'original_key': originalKey,
+        'bpm': bpm,
+        'time_signature': timeSignature,
+        'is_multitrack': isMultiTrack,
+        'chords_text': chordsText,
+      }).select().single();
+
+      final String songId = songInsertResponse['id'];
+      final List<StemTrack> createdStems = [];
+
+      // 2. Upload de cada arquivo de áudio para o bucket `audio-tracks`
+      for (int i = 0; i < stemsToUpload.length; i++) {
+        final item = stemsToUpload[i];
+        final file = item.file;
+        final double stepProgress = 0.2 + (0.7 * (i / stemsToUpload.length));
+        
+        onProgress?.call(stepProgress, 'Enviando faixa ${i + 1}/${stemsToUpload.length}: ${item.name}...');
+
+        final String storagePath = 'songs/$songId/${file.name}';
+
+        if (file.bytes != null) {
+          await client.storage.from(AppConfig.audioBucketName).uploadBinary(
+                storagePath,
+                file.bytes!,
+                fileOptions: const FileOptions(upsert: true),
+              );
+        } else if (file.path != null) {
+          final ioFile = File(file.path!);
+          await client.storage.from(AppConfig.audioBucketName).upload(
+                storagePath,
+                ioFile,
+                fileOptions: const FileOptions(upsert: true),
+              );
+        }
+
+        // 3. Registra a pista na tabela `song_stems`
+        final stemInsertResponse = await client.from('song_stems').insert({
+          'song_id': songId,
+          'name': item.name,
+          'is_cue': item.isCue,
+          'storage_path': storagePath,
+          'file_size_bytes': file.size,
+        }).select().single();
+
+        createdStems.add(
+          StemTrack(
+            id: stemInsertResponse['id'],
+            name: item.name,
+            isCue: item.isCue,
+            filePath: storagePath,
+          ),
+        );
+      }
+
+      onProgress?.call(1.0, 'Música cadastrada com sucesso no acervo!');
+
+      return Song(
+        id: songId,
+        title: title,
+        artist: artist,
+        originalKey: originalKey,
+        bpm: bpm,
+        timeSignature: timeSignature,
+        isMultiTrack: isMultiTrack,
+        chordsText: chordsText,
+        stems: createdStems,
+      );
+    } catch (e) {
+      debugPrint('Erro ao fazer upload da música: $e');
+      rethrow;
+    }
+  }
+
+  /// Remove uma música do Acervo Geral
+  static Future<bool> deleteSongFromLibrary(String songId) async {
+    if (!AppConfig.isConfigured) return false;
+    try {
+      await client.from('songs').delete().eq('id', songId);
+      return true;
+    } catch (e) {
+      debugPrint('Erro ao excluir música: $e');
+      return false;
+    }
   }
 
   /// Baixa uma pista de áudio da nuvem para o armazenamento do celular (Modo Offline)
@@ -86,36 +192,14 @@ class SupabaseService {
     final file = File(localPath);
 
     if (await file.exists()) {
-      return file; // Já está baixado!
+      return file;
     }
 
     await file.parent.create(recursive: true);
-
-    // Obtém a URL pública do Cloudflare / Supabase Storage
     final audioUrl = client.storage.from(AppConfig.audioBucketName).getPublicUrl(storagePath);
     final response = await http.get(Uri.parse(audioUrl));
 
     await file.writeAsBytes(response.bodyBytes);
     return file;
-  }
-
-  /// Sincronização em tempo real (Notifica quando o líder mudar tom ou repertório)
-  static RealtimeChannel listenToSetlistChanges(String setlistId, VoidCallback onUpdate) {
-    return client
-        .channel('public:setlist_songs:$setlistId')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'setlist_songs',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'setlist_id',
-            value: setlistId,
-          ),
-          callback: (payload) {
-            onUpdate();
-          },
-        )
-        .subscribe();
   }
 }

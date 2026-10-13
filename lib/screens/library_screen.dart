@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/song.dart';
 import '../services/audio_engine.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -14,6 +16,62 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   String _searchQuery = '';
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncLibraryFromCloud();
+  }
+
+  Future<void> _syncLibraryFromCloud() async {
+    setState(() => _isLoading = true);
+    try {
+      final cloudSongs = await SupabaseService.fetchAllLibrarySongs();
+      final engine = context.read<AudioEngine>();
+      for (var song in cloudSongs) {
+        engine.addSongToLibrary(song);
+      }
+    } catch (e) {
+      debugPrint('Erro ao sincronizar acervo com a nuvem: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _confirmDeleteSong(Song song) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        title: Text('Excluir "${song.title}"?'),
+        content: const Text(
+          'Esta música será removida do Acervo Geral da banda e de todas as playlists.',
+          style: TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.roseMute),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await SupabaseService.deleteSongFromLibrary(song.id);
+              _syncLibraryFromCloud();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Música "${song.title}" excluída.')),
+                );
+              }
+            },
+            child: const Text('Excluir', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,19 +94,40 @@ class _LibraryScreenState extends State<LibraryScreen> {
               'REPOSITÓRIO GERAL',
               style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.bold),
             ),
-            const Text(
-              'Acervo de Músicas da Banda',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                const Text(
+                  'Acervo da Banda',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${allSongs.length}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: AppTheme.primary),
+            tooltip: 'Sincronizar com a nuvem',
+            onPressed: _syncLibraryFromCloud,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ElevatedButton.icon(
               onPressed: widget.onNavigateToUpload,
               icon: const Icon(Icons.add, size: 16),
-              label: const Text('Nova Música', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+              label: const Text('Nova', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.primary,
                 foregroundColor: Colors.black,
@@ -67,7 +146,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               TextField(
                 onChanged: (val) => setState(() => _searchQuery = val),
                 decoration: InputDecoration(
-                  hintText: 'Buscar por título, artista ou tom...',
+                  hintText: 'Buscar no acervo por título, artista ou tom...',
                   prefixIcon: const Icon(Icons.search, size: 20, color: AppTheme.primary),
                   filled: true,
                   fillColor: AppTheme.card,
@@ -80,90 +159,143 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Lista de Músicas do Acervo
+              // Lista de Músicas com Pull to Refresh
               Expanded(
-                child: filteredSongs.isEmpty
-                    ? Center(
-                        child: Text(
-                          _searchQuery.isEmpty ? 'Nenhuma música no acervo' : 'Nenhuma música encontrada',
-                          style: const TextStyle(color: Colors.white54),
-                        ),
-                      )
-                    : ListView.separated(
-                        itemCount: filteredSongs.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final song = filteredSongs[index];
-                          final isInCurrentSetlist = engine.currentSetlist?.songs.any((s) => s.id == song.id) ?? false;
-
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: AppTheme.card,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: AppTheme.cardBorder),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        song.title,
-                                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator(color: AppTheme.primary))
+                    : filteredSongs.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 64,
+                                    height: 64,
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.card,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: AppTheme.cardBorder),
+                                    ),
+                                    child: const Icon(Icons.library_music_outlined, size: 32, color: Colors.white24),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _searchQuery.isEmpty ? 'O acervo da banda está vazio' : 'Nenhuma música encontrada',
+                                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    _searchQuery.isEmpty
+                                        ? 'Cadastre as músicas da sua banda para montar playlists de culto rapidamente.'
+                                        : 'Tente buscar por outro termo ou cadastre uma nova música.',
+                                    style: const TextStyle(fontSize: 12, color: Colors.white54),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  if (_searchQuery.isEmpty) ...[
+                                    const SizedBox(height: 16),
+                                    ElevatedButton.icon(
+                                      onPressed: widget.onNavigateToUpload,
+                                      icon: const Icon(Icons.cloud_upload_outlined, size: 16),
+                                      label: const Text('Cadastrar Primeira Música', style: TextStyle(fontWeight: FontWeight.bold)),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppTheme.primary,
+                                        foregroundColor: Colors.black,
                                       ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        '${song.artist} • Tom: ${song.originalKey} • ${song.bpm} BPM',
-                                        style: const TextStyle(fontSize: 11, color: Colors.white54),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          )
+                        : RefreshIndicator(
+                            color: AppTheme.primary,
+                            onRefresh: _syncLibraryFromCloud,
+                            child: ListView.separated(
+                              itemCount: filteredSongs.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final song = filteredSongs[index];
+                                final isInCurrentSetlist =
+                                    engine.currentSetlist?.songs.any((s) => s.id == song.id) ?? false;
+
+                                return Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.card,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppTheme.cardBorder),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              song.title,
+                                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${song.artist} • Tom: ${song.originalKey} • ${song.bpm} BPM • ${song.stems.length} pista(s)',
+                                              style: const TextStyle(fontSize: 11, color: Colors.white54),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        margin: const EdgeInsets.only(right: 6),
+                                        decoration: BoxDecoration(
+                                          color: song.isMultiTrack
+                                              ? AppTheme.primary.withOpacity(0.15)
+                                              : Colors.white10,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          song.isMultiTrack ? 'MULTITRACK' : 'FAIXA ÚNICA',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            color: song.isMultiTrack ? AppTheme.primary : Colors.white60,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      IconButton(
+                                        icon: Icon(
+                                          isInCurrentSetlist ? Icons.check_circle : Icons.playlist_add,
+                                          color: isInCurrentSetlist ? AppTheme.emeraldSafe : AppTheme.primary,
+                                        ),
+                                        tooltip: isInCurrentSetlist
+                                            ? 'Já na playlist atual'
+                                            : 'Adicionar à playlist da semana',
+                                        onPressed: () {
+                                          if (!isInCurrentSetlist) {
+                                            engine.addSongToCurrentSetlist(song);
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('"${song.title}" adicionada à playlist!'),
+                                                backgroundColor: AppTheme.emeraldSafe,
+                                                duration: const Duration(seconds: 2),
+                                              ),
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline, size: 18, color: Colors.white30),
+                                        tooltip: 'Excluir do acervo',
+                                        onPressed: () => _confirmDeleteSong(song),
                                       ),
                                     ],
                                   ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  margin: const EdgeInsets.only(right: 8),
-                                  decoration: BoxDecoration(
-                                    color: song.isMultiTrack
-                                        ? AppTheme.primary.withOpacity(0.15)
-                                        : Colors.white10,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    song.isMultiTrack ? 'MULTITRACK' : 'FAIXA ÚNICA',
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.bold,
-                                      color: song.isMultiTrack ? AppTheme.primary : Colors.white60,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: Icon(
-                                    isInCurrentSetlist ? Icons.check_circle : Icons.add_circle_outline,
-                                    color: isInCurrentSetlist ? AppTheme.emeraldSafe : AppTheme.primary,
-                                  ),
-                                  tooltip: isInCurrentSetlist ? 'Já está na playlist' : 'Adicionar à playlist atual',
-                                  onPressed: () {
-                                    if (!isInCurrentSetlist) {
-                                      engine.addSongToCurrentSetlist(song);
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(
-                                          content: Text('"${song.title}" adicionada à playlist!'),
-                                          backgroundColor: AppTheme.emeraldSafe,
-                                          duration: const Duration(seconds: 2),
-                                        ),
-                                      );
-                                    }
-                                  },
-                                ),
-                              ],
+                                );
+                              },
                             ),
-                          );
-                        },
-                      ),
+                          ),
               ),
             ],
           ),

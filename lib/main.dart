@@ -72,7 +72,9 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
       ChordsScreen(
         onOpenMixer: () => _switchTab(2),
       ),
-      const UploadScreen(),
+      UploadScreen(
+        onSongSaved: () => _switchTab(1), // Ao salvar, vai direto para a aba de Acervo
+      ),
     ];
 
     return Scaffold(

@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:provider/provider.dart';
+import '../models/song.dart';
+import '../models/stem_track.dart';
+import '../services/audio_engine.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
 class UploadScreen extends StatefulWidget {
-  const UploadScreen({super.key});
+  final VoidCallback? onSongSaved;
+
+  const UploadScreen({super.key, this.onSongSaved});
 
   @override
   State<UploadScreen> createState() => _UploadScreenState();
@@ -11,23 +18,181 @@ class UploadScreen extends StatefulWidget {
 
 class _UploadScreenState extends State<UploadScreen> {
   final _titleController = TextEditingController();
+  final _artistController = TextEditingController();
   final _bpmController = TextEditingController(text: '72');
-  final _keyController = TextEditingController(text: 'D');
-  
-  bool _isMultiTrack = true;
-  List<PlatformFile> _selectedFiles = [];
+  final _chordsController = TextEditingController();
 
-  Future<void> _pickFiles() async {
+  String _selectedKey = 'G';
+  String _selectedTimeSignature = '4/4';
+  bool _isMultiTrack = true;
+  bool _isUploading = false;
+  double _uploadProgress = 0.0;
+  String _uploadStatusText = '';
+
+  final List<UploadStemItem> _selectedStems = [];
+
+  final List<String> _musicalKeys = [
+    'C', 'C#', 'Db', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'
+  ];
+
+  final List<String> _timeSignatures = ['4/4', '6/8', '3/4', '2/4', '12/8'];
+
+  Future<void> _pickAudioFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: _isMultiTrack,
       type: FileType.custom,
-      allowedExtensions: ['m4a', 'wav', 'mp3', 'zip'],
+      allowedExtensions: ['m4a', 'wav', 'mp3', 'aac', 'flac'],
     );
 
-    if (result != null) {
+    if (result != null && result.files.isNotEmpty) {
       setState(() {
-        _selectedFiles = result.files;
+        for (var file in result.files) {
+          final fileNameLower = file.name.toLowerCase();
+          final isCue = fileNameLower.contains('click') ||
+              fileNameLower.contains('metronomo') ||
+              fileNameLower.contains('guia') ||
+              fileNameLower.contains('guide') ||
+              fileNameLower.contains('cue') ||
+              fileNameLower.contains('count');
+
+          // Evita duplicatas pelo nome
+          if (!_selectedStems.any((s) => s.file.name == file.name)) {
+            _selectedStems.add(
+              UploadStemItem(
+                file: file,
+                name: _cleanStemName(file.name),
+                isCue: isCue,
+              ),
+            );
+          }
+        }
       });
+    }
+  }
+
+  String _cleanStemName(String filename) {
+    // Remove extensão e limpa nome
+    String name = filename.replaceAll(RegExp(r'\.(m4a|wav|mp3|aac|flac)$', caseSensitive: false), '');
+    name = name.replaceAll(RegExp(r'^[0-9]+[_\-\s]*'), ''); // Remove numeração no início (ex: 01_click -> click)
+    return name.toUpperCase();
+  }
+
+  void _removeStem(int index) {
+    setState(() {
+      _selectedStems.removeAt(index);
+    });
+  }
+
+  Future<void> _handleSaveSong() async {
+    final title = _titleController.text.trim();
+    final artist = _artistController.text.trim();
+    final bpm = int.tryParse(_bpmController.text.trim()) ?? 120;
+
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Por favor, informe o título da música!'), backgroundColor: AppTheme.roseMute),
+      );
+      return;
+    }
+
+    if (_selectedStems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecione pelo menos um arquivo de áudio!'), backgroundColor: AppTheme.roseMute),
+      );
+      return;
+    }
+
+    setState(() {
+      _isUploading = true;
+      _uploadProgress = 0.05;
+      _uploadStatusText = 'Iniciando upload...';
+    });
+
+    try {
+      final engine = context.read<AudioEngine>();
+      Song? createdSong;
+
+      // 1. Tenta fazer o upload real para o Supabase Storage + Database
+      try {
+        createdSong = await SupabaseService.uploadNewSong(
+          title: title,
+          artist: artist.isEmpty ? 'Banda' : artist,
+          originalKey: _selectedKey,
+          bpm: bpm,
+          timeSignature: _selectedTimeSignature,
+          isMultiTrack: _isMultiTrack,
+          chordsText: _chordsController.text,
+          stemsToUpload: _selectedStems,
+          onProgress: (prog, status) {
+            setState(() {
+              _uploadProgress = prog;
+              _uploadStatusText = status;
+            });
+          },
+        );
+      } catch (e) {
+        debugPrint('Upload no Supabase falhou, salvando no repositório local: $e');
+      }
+
+      // 2. Se o Supabase ainda estiver sem credenciais ou offline, cria a música localmente
+      if (createdSong == null) {
+        final List<StemTrack> stems = _selectedStems.map((item) {
+          return StemTrack(
+            id: 'stem-${DateTime.now().millisecondsSinceEpoch}-${item.name}',
+            name: item.name,
+            isCue: item.isCue,
+            filePath: item.file.path,
+          );
+        }).toList();
+
+        createdSong = Song(
+          id: 'song-${DateTime.now().millisecondsSinceEpoch}',
+          title: title,
+          artist: artist.isEmpty ? 'Banda' : artist,
+          originalKey: _selectedKey,
+          bpm: bpm,
+          timeSignature: _selectedTimeSignature,
+          isMultiTrack: _isMultiTrack,
+          chordsText: _chordsController.text,
+          stems: stems,
+        );
+      }
+
+      // 3. Salva no Acervo Geral do AudioEngine
+      engine.addSongToLibrary(createdSong);
+
+      setState(() {
+        _isUploading = false;
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Música "$title" salva no Acervo Geral com sucesso!'),
+            backgroundColor: AppTheme.emeraldSafe,
+          ),
+        );
+      }
+
+      // Limpa os campos
+      _titleController.clear();
+      _artistController.clear();
+      _chordsController.clear();
+      setState(() {
+        _selectedStems.clear();
+      });
+
+      // Notifica para ir para a aba do Acervo
+      widget.onSongSaved?.call();
+    } catch (e) {
+      setState(() {
+        _isUploading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao salvar música: $e'), backgroundColor: AppTheme.roseMute),
+        );
+      }
     }
   }
 
@@ -35,7 +200,13 @@ class _UploadScreenState extends State<UploadScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Cadastrar Nova Música', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            Text('ACERVO GERAL', style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.bold)),
+            Text('Cadastrar Nova Música', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
@@ -44,16 +215,29 @@ class _UploadScreenState extends State<UploadScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Defina as informações e selecione os áudios (Multitracks ou Faixa Única)',
+                'Preencha as informações da música e selecione os áudios (Multitrack ou Faixa Única). Ela ficará salva no Acervo para sempre.',
                 style: TextStyle(fontSize: 12, color: Colors.white54),
               ),
               const SizedBox(height: 16),
 
-              // Nome da Música
+              // Título e Artista
               TextField(
                 controller: _titleController,
                 decoration: InputDecoration(
-                  labelText: 'Nome da Música',
+                  labelText: 'Título da Música *',
+                  hintText: 'Ex: Há Um Rio',
+                  filled: true,
+                  fillColor: AppTheme.card,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              TextField(
+                controller: _artistController,
+                decoration: InputDecoration(
+                  labelText: 'Artista / Ministério',
+                  hintText: 'Ex: Fernandinho',
                   filled: true,
                   fillColor: AppTheme.card,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -61,30 +245,80 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Tom Original e BPM
+              // Tom, BPM e Compasso
               Row(
                 children: [
+                  // Dropdown Tom
                   Expanded(
+                    flex: 2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.cardBorder),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedKey,
+                          isExpanded: true,
+                          dropdownColor: AppTheme.card,
+                          items: _musicalKeys.map((k) {
+                            return DropdownMenuItem(
+                              value: k,
+                              child: Text('Tom: $k', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) setState(() => _selectedKey = val);
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // BPM
+                  Expanded(
+                    flex: 2,
                     child: TextField(
-                      controller: _keyController,
+                      controller: _bpmController,
+                      keyboardType: TextInputType.number,
                       decoration: InputDecoration(
-                        labelText: 'Tom Original (ex: G, A)',
+                        labelText: 'BPM',
                         filled: true,
                         fillColor: AppTheme.card,
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
+
+                  // Compasso
                   Expanded(
-                    child: TextField(
-                      controller: _bpmController,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText: 'BPM (Andamento)',
-                        filled: true,
-                        fillColor: AppTheme.card,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    flex: 2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppTheme.cardBorder),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _selectedTimeSignature,
+                          isExpanded: true,
+                          dropdownColor: AppTheme.card,
+                          items: _timeSignatures.map((ts) {
+                            return DropdownMenuItem(
+                              value: ts,
+                              child: Text(ts, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) setState(() => _selectedTimeSignature = val);
+                          },
+                        ),
                       ),
                     ),
                   ),
@@ -92,8 +326,8 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Tipo de Áudio
-              const Text('Formato do Áudio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              // Formato do Áudio (Multitrack vs Faixa Única)
+              const Text('Tipo de Áudio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -113,7 +347,7 @@ class _UploadScreenState extends State<UploadScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: const [
                             Text('Multitrack', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                            Text('Stems separados', style: TextStyle(fontSize: 10, color: Colors.white54)),
+                            Text('Faixas e stems separados', style: TextStyle(fontSize: 10, color: Colors.white54)),
                           ],
                         ),
                       ),
@@ -136,7 +370,7 @@ class _UploadScreenState extends State<UploadScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: const [
                             Text('Faixa Única', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                            Text('Estéreo / Split L-R', style: TextStyle(fontSize: 10, color: Colors.white54)),
+                            Text('Arquivo estéreo / Split L-R', style: TextStyle(fontSize: 10, color: Colors.white54)),
                           ],
                         ),
                       ),
@@ -146,29 +380,29 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Seletor de Arquivos (Dropzone)
+              // Botão Selecionar Áudios
               GestureDetector(
-                onTap: _pickFiles,
+                onTap: _pickAudioFiles,
                 child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: AppTheme.card,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.cardBorder, style: BorderStyle.solid),
+                    border: Border.all(color: AppTheme.cardBorder),
                   ),
                   child: Column(
                     children: [
-                      const Icon(Icons.cloud_upload_outlined, size: 40, color: AppTheme.primary),
+                      const Icon(Icons.audio_file_outlined, size: 36, color: AppTheme.primary),
                       const SizedBox(height: 8),
                       Text(
-                        _selectedFiles.isEmpty
-                            ? 'Clique para selecionar os arquivos de áudio'
-                            : '${_selectedFiles.length} arquivo(s) selecionado(s)',
+                        _selectedStems.isEmpty
+                            ? 'Clique para selecionar os áudios'
+                            : '${_selectedStems.length} faixa(s) selecionada(s)',
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                       ),
                       const Text(
-                        'Suporta .m4a, .mp3, .wav ou arquivo .zip com os stems',
+                        'Suporta .m4a, .mp3, .wav, .aac (Mapeamento automático de Click no canal L)',
                         style: TextStyle(fontSize: 10, color: Colors.white54),
                       ),
                     ],
@@ -176,52 +410,139 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
 
-              if (_selectedFiles.isNotEmpty) ...[
+              // Lista de Pistas Selecionadas para o Upload
+              if (_selectedStems.isNotEmpty) ...[
                 const SizedBox(height: 12),
-                const Text('Pistas Selecionadas:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                const Text('Mapeamento de Saída (Cabo Y):', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                ..._selectedFiles.map((f) => Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _selectedStems.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final item = _selectedStems[index];
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.background,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: AppTheme.cardBorder),
+                      ),
                       child: Row(
                         children: [
-                          const Icon(Icons.audio_file, size: 14, color: AppTheme.primary),
-                          const SizedBox(width: 6),
                           Expanded(
-                            child: Text(
-                              f.name,
-                              style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
-                              overflow: TextOverflow.ellipsis,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.name,
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  '${(item.file.size / (1024 * 1024)).toStringAsFixed(1)} MB • ${item.file.name}',
+                                  style: const TextStyle(fontSize: 9, color: Colors.white38),
+                                ),
+                              ],
                             ),
                           ),
-                          Text(
-                            '${(f.size / (1024 * 1024)).toStringAsFixed(1)} MB',
-                            style: const TextStyle(fontSize: 10, color: Colors.white38),
+                          // Toggle Cue vs Banda
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                item.isCue = !item.isCue;
+                              });
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: item.isCue
+                                    ? AppTheme.amberCue.withOpacity(0.2)
+                                    : AppTheme.primary.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: item.isCue ? AppTheme.amberCue : AppTheme.primary,
+                                ),
+                              ),
+                              child: Text(
+                                item.isCue ? 'Fone / L (Click/Guia)' : 'P.A. / R (Banda)',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: item.isCue ? AppTheme.amberCue : AppTheme.primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 16, color: Colors.white38),
+                            onPressed: () => _removeStem(index),
                           ),
                         ],
                       ),
-                    )),
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 16),
+
+              // Cifra & Letra (Opcional)
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('Cifra e Letra da Música (Opcional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Cole os acordes para acompanhar sincronizado no palco', style: TextStyle(fontSize: 10, color: Colors.white54)),
+                  children: [
+                    TextField(
+                      controller: _chordsController,
+                      maxLines: 6,
+                      decoration: InputDecoration(
+                        hintText: 'Cole a cifra aqui...\nExemplo:\nG   D   Em7   C9\nOh, impressionante amor...',
+                        filled: true,
+                        fillColor: AppTheme.card,
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // Barra de Progresso durante Upload
+              if (_isUploading) ...[
+                LinearProgressIndicator(value: _uploadProgress, color: AppTheme.primary, backgroundColor: AppTheme.cardBorder),
+                const SizedBox(height: 8),
+                Text(
+                  _uploadStatusText,
+                  style: const TextStyle(fontSize: 11, color: AppTheme.primary, fontFamily: 'monospace'),
+                ),
+                const SizedBox(height: 16),
               ],
 
-              const SizedBox(height: 24),
-              // Botão de Salvar
+              // Botão Salvar
               SizedBox(
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Música cadastrada e sincronizada com sucesso!'),
-                        backgroundColor: AppTheme.emeraldSafe,
-                      ),
-                    );
-                  },
+                  onPressed: _isUploading ? null : _handleSaveSong,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.black,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text('Salvar e Sincronizar com a Banda', style: TextStyle(fontWeight: FontWeight.bold)),
+                  child: _isUploading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                        )
+                      : const Text(
+                          'Salvar no Acervo da Banda ➔',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                        ),
                 ),
               ),
             ],
