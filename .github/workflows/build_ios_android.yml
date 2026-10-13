@@ -1,0 +1,71 @@
+name: Build RealTracks (Android & iOS)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  # ==========================================
+  # JOB 1: BUILD DO ANDROID (.apk / .aab)
+  # ==========================================
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java (JDK 17)
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Android Release APK
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealTracks-Android-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  # ==========================================
+  # JOB 2: BUILD DO IOS (macOS Runner)
+  # ==========================================
+  build-ios:
+    name: Build iOS (sem precisar de Mac local)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build iOS App (Sem assinatura / Simulator & TestFlight)
+        run: flutter build ios --release --no-codesign
+
+      - name: Upload iOS Payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealTracks-iOS-Build
+          path: build/ios/iphoneos
