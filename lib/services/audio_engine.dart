@@ -56,7 +56,7 @@ class AudioEngine extends ChangeNotifier {
     try {
       AudioPlayer.global.setAudioContext(
         AudioContextConfig(
-          focus: AudioContextConfigFocus.none,
+          focus: AudioContextConfigFocus.mixWithOthers,
           stayAwake: true,
         ).build(),
       );
@@ -447,7 +447,7 @@ class AudioEngine extends ChangeNotifier {
               try {
                 await player.setAudioContext(
                   AudioContextConfig(
-                    focus: AudioContextConfigFocus.none,
+                    focus: AudioContextConfigFocus.mixWithOthers,
                     stayAwake: true,
                   ).build(),
                 );

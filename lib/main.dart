@@ -19,7 +19,7 @@ void main() async {
   try {
     await AudioPlayer.global.setAudioContext(
       AudioContextConfig(
-        focus: AudioContextConfigFocus.none,
+        focus: AudioContextConfigFocus.mixWithOthers,
         stayAwake: true,
       ).build(),
     );
