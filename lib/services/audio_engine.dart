@@ -89,6 +89,32 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  void setCurrentSetlist(Setlist setlist) {
+    _currentSetlist = setlist;
+    _currentSongIndex = 0;
+    _pitchOffset = (setlist.songs.isNotEmpty) ? setlist.songs[0].pitchOffsetSemitones : 0;
+    notifyListeners();
+  }
+
+  void reorderSetlistSong(int oldIndex, int newIndex) {
+    if (_currentSetlist == null) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    final song = _currentSetlist!.songs.removeAt(oldIndex);
+    _currentSetlist!.songs.insert(newIndex, song);
+    notifyListeners();
+  }
+
+  void updateSongPitchOffset(int songIndex, int offset) {
+    if (_currentSetlist == null || songIndex < 0 || songIndex >= _currentSetlist!.songs.length) return;
+    final song = _currentSetlist!.songs[songIndex];
+    song.pitchOffsetSemitones = offset.clamp(-6, 6);
+    song.currentKey = PitchShifterService.transposeNote(song.originalKey, song.pitchOffsetSemitones);
+    if (songIndex == _currentSongIndex) {
+      _pitchOffset = song.pitchOffsetSemitones;
+    }
+    notifyListeners();
+  }
+
   // Controles de Reprodução
   void togglePlay() {
     if (currentSong == null) return;
@@ -132,33 +158,36 @@ class AudioEngine extends ChangeNotifier {
   void selectSong(int index) {
     if (_currentSetlist != null && index >= 0 && index < _currentSetlist!.songs.length) {
       _currentSongIndex = index;
-      _pitchOffset = 0;
+      final song = _currentSetlist!.songs[index];
+      _pitchOffset = song.pitchOffsetSemitones;
       stop();
     }
   }
 
   void setPitchOffset(int semitones) {
     _pitchOffset = semitones.clamp(-6, 6);
+    final song = currentSong;
+    if (song != null) {
+      song.pitchOffsetSemitones = _pitchOffset;
+      song.currentKey = PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
+    }
     notifyListeners();
   }
 
   void incrementPitch() {
     if (_pitchOffset < 6) {
-      _pitchOffset++;
-      notifyListeners();
+      setPitchOffset(_pitchOffset + 1);
     }
   }
 
   void decrementPitch() {
     if (_pitchOffset > -6) {
-      _pitchOffset--;
-      notifyListeners();
+      setPitchOffset(_pitchOffset - 1);
     }
   }
 
   void resetPitch() {
-    _pitchOffset = 0;
-    notifyListeners();
+    setPitchOffset(0);
   }
 
   void setStemVolume(String stemId, double volume) {

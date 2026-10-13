@@ -203,4 +203,104 @@ class SupabaseService {
     await file.writeAsBytes(response.bodyBytes);
     return file;
   }
+
+  /// Busca a playlist semanal atual ou cria uma inicial se não houver
+  static Future<Setlist?> fetchCurrentSetlist() async {
+    if (!AppConfig.isConfigured) return null;
+    try {
+      final setlistsResponse = await client
+          .from('setlists')
+          .select('*')
+          .order('event_date', ascending: false)
+          .limit(1);
+
+      if (setlistsResponse.isEmpty) {
+        return null;
+      }
+
+      final setlistRow = setlistsResponse.first;
+      final setlistId = setlistRow['id'] as String;
+
+      final itemsResponse = await client
+          .from('setlist_songs')
+          .select('*, songs(*, song_stems(*))')
+          .eq('setlist_id', setlistId)
+          .order('order_index', ascending: true);
+
+      final List<Song> songs = [];
+      for (var item in itemsResponse) {
+        final songData = item['songs'];
+        if (songData != null) {
+          final stemsRaw = songData['song_stems'] as List? ?? [];
+          final List<StemTrack> stems = stemsRaw.map<StemTrack>((st) {
+            return StemTrack(
+              id: st['id'] ?? '',
+              name: st['name'] ?? '',
+              isCue: st['is_cue'] ?? false,
+              filePath: st['storage_path'],
+            );
+          }).toList();
+
+          final int pitchOffset = item['pitch_offset'] ?? 0;
+          final String customKey = item['custom_key'] ?? songData['original_key'];
+
+          songs.add(
+            Song(
+              id: songData['id'],
+              title: songData['title'],
+              artist: songData['artist'] ?? '',
+              originalKey: songData['original_key'] ?? 'G',
+              currentKey: customKey,
+              pitchOffsetSemitones: pitchOffset,
+              bpm: songData['bpm'] ?? 120,
+              timeSignature: songData['time_signature'] ?? '4/4',
+              isMultiTrack: songData['is_multitrack'] ?? true,
+              chordsText: songData['chords_text'] ?? '',
+              stems: stems,
+            ),
+          );
+        }
+      }
+
+      return Setlist(
+        id: setlistId,
+        title: setlistRow['title'] ?? 'Playlist da Semana',
+        date: DateTime.tryParse(setlistRow['event_date']) ?? DateTime.now(),
+        songs: songs,
+        isOfflineReady: true,
+      );
+    } catch (e) {
+      debugPrint('Erro ao buscar playlist no Supabase: $e');
+      return null;
+    }
+  }
+
+  /// Salva ou sincroniza a playlist semanal no Supabase
+  static Future<bool> saveSetlistToCloud(Setlist setlist) async {
+    if (!AppConfig.isConfigured) return false;
+    try {
+      await client.from('setlists').upsert({
+        'id': setlist.id,
+        'title': setlist.title,
+        'event_date': setlist.date.toIso8601String(),
+      });
+
+      await client.from('setlist_songs').delete().eq('setlist_id', setlist.id);
+
+      for (int i = 0; i < setlist.songs.length; i++) {
+        final song = setlist.songs[i];
+        await client.from('setlist_songs').insert({
+          'setlist_id': setlist.id,
+          'song_id': song.id,
+          'order_index': i + 1,
+          'custom_key': song.currentKey,
+          'pitch_offset': song.pitchOffsetSemitones,
+        });
+      }
+      return true;
+    } catch (e) {
+      debugPrint('Erro ao salvar playlist no Supabase: $e');
+      return false;
+    }
+  }
 }

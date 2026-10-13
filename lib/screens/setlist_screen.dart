@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/song.dart';
+import '../models/setlist.dart';
 import '../services/audio_engine.dart';
+import '../services/pitch_shifter.dart';
+import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
-class SetlistScreen extends StatelessWidget {
+class SetlistScreen extends StatefulWidget {
   final VoidCallback onOpenMixer;
   final VoidCallback onNavigateToUpload;
 
@@ -14,12 +17,155 @@ class SetlistScreen extends StatelessWidget {
     required this.onNavigateToUpload,
   });
 
+  @override
+  State<SetlistScreen> createState() => _SetlistScreenState();
+}
+
+class _SetlistScreenState extends State<SetlistScreen> {
+  bool _isSyncing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSetlistFromCloud();
+  }
+
+  Future<void> _loadSetlistFromCloud() async {
+    setState(() => _isSyncing = true);
+    try {
+      final cloudSetlist = await SupabaseService.fetchCurrentSetlist();
+      if (cloudSetlist != null && mounted) {
+        final engine = context.read<AudioEngine>();
+        engine.setCurrentSetlist(cloudSetlist);
+      }
+    } catch (e) {
+      debugPrint('Erro ao carregar playlist da nuvem: $e');
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  Future<void> _saveSetlistToCloud() async {
+    final engine = context.read<AudioEngine>();
+    final setlist = engine.currentSetlist;
+    if (setlist == null) return;
+
+    setState(() => _isSyncing = true);
+    try {
+      final success = await SupabaseService.saveSetlistToCloud(setlist);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(success
+                ? '✅ Playlist da semana salva na nuvem para toda a banda!'
+                : '⚠️ Não foi possível sincronizar com a nuvem.'),
+            backgroundColor: success ? AppTheme.emeraldSafe : AppTheme.amberCue,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Erro ao salvar playlist: $e'), backgroundColor: AppTheme.roseMute),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
   void _showAddSongsModal(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _AddSongsBottomSheet(onNavigateToUpload: onNavigateToUpload),
+      builder: (ctx) => _AddSongsBottomSheet(
+        onNavigateToUpload: widget.onNavigateToUpload,
+        onSongsAdded: () {
+          _saveSetlistToCloud();
+        },
+      ),
+    );
+  }
+
+  void _showTransposeDialog(int index, Song song) {
+    final engine = context.read<AudioEngine>();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        int tempOffset = song.pitchOffsetSemitones;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final transposedKey = PitchShifterService.transposeNote(song.originalKey, tempOffset);
+            return AlertDialog(
+              backgroundColor: AppTheme.card,
+              title: Text('Tom de "${song.title}"', style: const TextStyle(fontSize: 16)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Tom Original: ${song.originalKey}',
+                    style: const TextStyle(fontSize: 12, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove_circle_outline, color: AppTheme.primary),
+                        onPressed: tempOffset > -6
+                            ? () => setModalState(() => tempOffset--)
+                            : null,
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.background,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.primary),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(
+                              transposedKey,
+                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.amberCue),
+                            ),
+                            Text(
+                              tempOffset == 0 ? 'Original' : '${tempOffset > 0 ? "+$tempOffset" : tempOffset} semitons',
+                              style: const TextStyle(fontSize: 10, color: Colors.white60),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary),
+                        onPressed: tempOffset < 6
+                            ? () => setModalState(() => tempOffset++)
+                            : null,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.black),
+                  onPressed: () {
+                    engine.updateSongPitchOffset(index, tempOffset);
+                    Navigator.pop(ctx);
+                    _saveSetlistToCloud();
+                  },
+                  child: const Text('Salvar Tom'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -48,6 +194,13 @@ class SetlistScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          IconButton(
+            icon: _isSyncing
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary))
+                : const Icon(Icons.cloud_sync_outlined, color: AppTheme.primary),
+            tooltip: 'Sincronizar com a nuvem',
+            onPressed: _isSyncing ? null : _saveSetlistToCloud,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: ElevatedButton.icon(
@@ -93,11 +246,11 @@ class SetlistScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Playlist Pronta para o Show (${setlist.songs.length} Músicas)',
+                            'Playlist da Semana (${setlist.songs.length} Músicas)',
                             style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
                           ),
                           const Text(
-                            'Áudios baixados no aparelho para reprodução sem internet',
+                            'Arraste pelo ícone ≡ para reordenar a ordem do culto',
                             style: TextStyle(fontSize: 9, color: Colors.white70),
                           ),
                         ],
@@ -108,7 +261,7 @@ class SetlistScreen extends StatelessWidget {
               ),
               const SizedBox(height: 10),
 
-              // Lista de Músicas da Playlist
+              // Lista de Músicas da Playlist com Reordenação
               Expanded(
                 child: setlist.songs.isEmpty
                     ? Center(
@@ -124,109 +277,138 @@ class SetlistScreen extends StatelessWidget {
                           ],
                         ),
                       )
-                    : ListView.separated(
+                    : ReorderableListView.builder(
                         itemCount: setlist.songs.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
+                        onReorder: (oldIdx, newIdx) {
+                          engine.reorderSetlistSong(oldIdx, newIdx);
+                          _saveSetlistToCloud();
+                        },
                         itemBuilder: (context, index) {
                           final song = setlist.songs[index];
                           final isCurrent = index == engine.currentSongIndex;
 
-                          return Dismissible(
+                          return Container(
                             key: ValueKey(song.id + index.toString()),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 16),
-                              decoration: BoxDecoration(
-                                color: AppTheme.roseMute,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            onDismissed: (_) => engine.removeSongFromSetlist(index),
-                            child: GestureDetector(
-                              onTap: () {
-                                engine.selectSong(index);
-                                onOpenMixer();
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.all(12),
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: Dismissible(
+                              key: ValueKey('dismiss_${song.id}_$index'),
+                              direction: DismissDirection.endToStart,
+                              background: Container(
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 16),
                                 decoration: BoxDecoration(
-                                  color: isCurrent ? const Color(0xFF075985).withOpacity(0.3) : AppTheme.card,
+                                  color: AppTheme.roseMute,
                                   borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                    color: isCurrent ? AppTheme.primary : AppTheme.cardBorder,
-                                    width: isCurrent ? 1.5 : 1.0,
-                                  ),
                                 ),
-                                child: Row(
-                                  children: [
-                                    Container(
-                                      width: 26,
-                                      height: 26,
-                                      alignment: Alignment.center,
-                                      decoration: BoxDecoration(
-                                        color: isCurrent ? AppTheme.primary : AppTheme.cardBorder,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Text(
-                                        (index + 1).toString().padLeft(2, '0'),
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.bold,
-                                          color: isCurrent ? Colors.black : Colors.white70,
+                                child: const Icon(Icons.delete, color: Colors.white),
+                              ),
+                              onDismissed: (_) {
+                                engine.removeSongFromSetlist(index);
+                                _saveSetlistToCloud();
+                              },
+                              child: GestureDetector(
+                                onTap: () {
+                                  engine.selectSong(index);
+                                  widget.onOpenMixer();
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: isCurrent ? const Color(0xFF075985).withOpacity(0.3) : AppTheme.card,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isCurrent ? AppTheme.primary : AppTheme.cardBorder,
+                                      width: isCurrent ? 1.5 : 1.0,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 26,
+                                        height: 26,
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: isCurrent ? AppTheme.primary : AppTheme.cardBorder,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Text(
+                                          (index + 1).toString().padLeft(2, '0'),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: isCurrent ? Colors.black : Colors.white70,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            song.title,
-                                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Row(
-                                            children: [
-                                              Text(
-                                                'Tom: ${song.originalKey}',
-                                                style: const TextStyle(
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: AppTheme.amberCue,
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              song.title,
+                                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              children: [
+                                                GestureDetector(
+                                                  onTap: () => _showTransposeDialog(index, song),
+                                                  child: Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                    decoration: BoxDecoration(
+                                                      color: AppTheme.amberCue.withOpacity(0.15),
+                                                      borderRadius: BorderRadius.circular(6),
+                                                      border: Border.all(color: AppTheme.amberCue.withOpacity(0.4)),
+                                                    ),
+                                                    child: Text(
+                                                      'Tom: ${song.currentKey}${song.pitchOffsetSemitones != 0 ? " (${song.pitchOffsetSemitones > 0 ? "+${song.pitchOffsetSemitones}" : song.pitchOffsetSemitones})" : ""}',
+                                                      style: const TextStyle(
+                                                        fontSize: 10,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: AppTheme.amberCue,
+                                                      ),
+                                                    ),
+                                                  ),
                                                 ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                '• ${song.bpm} BPM',
-                                                style: const TextStyle(fontSize: 11, color: Colors.white54),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: song.isMultiTrack
-                                            ? AppTheme.primary.withOpacity(0.15)
-                                            : Colors.white10,
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        song.isMultiTrack ? 'MULTITRACK' : 'FAIXA ÚNICA',
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.bold,
-                                          color: song.isMultiTrack ? AppTheme.primary : Colors.white60,
-                                          fontFamily: 'monospace',
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  '• ${song.bpm} BPM',
+                                                  style: const TextStyle(fontSize: 11, color: Colors.white54),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                        decoration: BoxDecoration(
+                                          color: song.isMultiTrack
+                                              ? AppTheme.primary.withOpacity(0.15)
+                                              : Colors.white10,
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          song.isMultiTrack ? 'MULTITRACK' : 'FAIXA ÚNICA',
+                                          style: TextStyle(
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.bold,
+                                            color: song.isMultiTrack ? AppTheme.primary : Colors.white60,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      ReorderableDragStartListener(
+                                        index: index,
+                                        child: const Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: 4),
+                                          child: Icon(Icons.drag_handle, color: Colors.white38, size: 20),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -240,7 +422,7 @@ class SetlistScreen extends StatelessWidget {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton(
-                  onPressed: onOpenMixer,
+                  onPressed: widget.onOpenMixer,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.black,
@@ -265,8 +447,12 @@ class SetlistScreen extends StatelessWidget {
 // ==========================================
 class _AddSongsBottomSheet extends StatefulWidget {
   final VoidCallback onNavigateToUpload;
+  final VoidCallback? onSongsAdded;
 
-  const _AddSongsBottomSheet({required this.onNavigateToUpload});
+  const _AddSongsBottomSheet({
+    required this.onNavigateToUpload,
+    this.onSongsAdded,
+  });
 
   @override
   State<_AddSongsBottomSheet> createState() => _AddSongsBottomSheetState();
@@ -415,6 +601,7 @@ class _AddSongsBottomSheetState extends State<_AddSongsBottomSheet> {
                           .where((s) => _selectedSongIds.contains(s.id))
                           .toList();
                       engine.addMultipleSongsToSetlist(selectedSongs);
+                      widget.onSongsAdded?.call();
                       Navigator.pop(context);
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
