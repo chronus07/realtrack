@@ -1,4 +1,4 @@
-name: Build RealTracks (Android & iOS)
+name: Build RealTracks (Android, iOS & Web PWA)
 
 on:
   push:
@@ -7,9 +7,12 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   # ==========================================
-  # JOB 1: BUILD DO ANDROID (.apk)
+  # JOB 1: BUILD DO ANDROID (.apk) & GITHUB RELEASE
   # ==========================================
   build-android:
     name: Build Android APK
@@ -42,6 +45,19 @@ jobs:
           name: RealTracks-Android-APK
           path: build/app/outputs/flutter-apk/*.apk
           if-no-files-found: error
+
+      - name: Publish Direct APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest
+          name: "RealTracks - Versão Mais Recente"
+          body: "Atualização automática com instalador direto (.apk) para a banda."
+          draft: false
+          prerelease: false
+          files: build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ==========================================
   # JOB 2: BUILD DO IOS (macOS Runner)
@@ -81,3 +97,35 @@ jobs:
           name: RealTracks-iOS-Build
           path: build/ios/iphoneos/RealTracks-iOS.ipa
           if-no-files-found: warn
+
+  # ==========================================
+  # JOB 3: BUILD WEB PWA (GITHUB PAGES)
+  # ==========================================
+  build-web:
+    name: Build & Deploy Web PWA
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Generate Web Platform
+        run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=web
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Flutter Web PWA
+        run: flutter build web --release --base-href /realtrack/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web

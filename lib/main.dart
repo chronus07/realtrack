@@ -8,6 +8,7 @@ import 'screens/library_screen.dart';
 import 'screens/mixer_screen.dart';
 import 'screens/chords_screen.dart';
 import 'screens/upload_screen.dart';
+import 'services/update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +52,21 @@ class MainNavigationShell extends StatefulWidget {
 
 class _MainNavigationShellState extends State<MainNavigationShell> {
   int _currentIndex = 0; // Inicia na tela de Playlists
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAppUpdates();
+    });
+  }
+
+  Future<void> _checkAppUpdates() async {
+    final updateInfo = await UpdateService.checkForUpdate();
+    if (updateInfo != null && updateInfo.hasUpdate && mounted) {
+      UpdateService.showUpdateDialog(context, updateInfo);
+    }
+  }
 
   void _switchTab(int index) {
     setState(() {
