@@ -9,7 +9,7 @@ on:
 
 jobs:
   # ==========================================
-  # JOB 1: BUILD DO ANDROID (.apk / .aab)
+  # JOB 1: BUILD DO ANDROID (.apk)
   # ==========================================
   build-android:
     name: Build Android APK
@@ -30,6 +30,9 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Generate Android Native Platform
+        run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=android
+
       - name: Install Dependencies
         run: flutter pub get
 
@@ -40,7 +43,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RealTracks-Android-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
 
   # ==========================================
   # JOB 2: BUILD DO IOS (macOS Runner)
@@ -58,14 +62,25 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Generate iOS Native Platform
+        run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
+
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build iOS App (Sem assinatura / Simulator & TestFlight)
+      - name: Build iOS App
         run: flutter build ios --release --no-codesign
+
+      - name: Compress iOS App Bundle
+        run: |
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r RealTracks-iOS.ipa Payload
 
       - name: Upload iOS Payload
         uses: actions/upload-artifact@v4
         with:
           name: RealTracks-iOS-Build
-          path: build/ios/iphoneos
+          path: build/ios/iphoneos/RealTracks-iOS.ipa
+          if-no-files-found: warn
