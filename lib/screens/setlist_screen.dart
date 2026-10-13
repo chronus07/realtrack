@@ -27,73 +27,59 @@ class _SetlistScreenState extends State<SetlistScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSetlistFromCloud();
+    _loadSetlistsFromCloud();
   }
 
-  Future<void> _loadSetlistFromCloud() async {
+  Future<void> _loadSetlistsFromCloud() async {
     setState(() => _isSyncing = true);
     try {
-      final cloudSetlist = await SupabaseService.fetchCurrentSetlist();
-      if (cloudSetlist != null && mounted) {
+      final cloudSetlists = await SupabaseService.fetchAllSetlists();
+      if (cloudSetlists.isNotEmpty && mounted) {
         final engine = context.read<AudioEngine>();
-        engine.setCurrentSetlist(cloudSetlist);
+        engine.setAllSetlists(cloudSetlists);
       }
     } catch (e) {
-      debugPrint('Erro ao carregar playlist da nuvem: $e');
+      debugPrint('Erro ao carregar playlists da nuvem: $e');
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
   }
 
-  Future<void> _syncSetlist() async {
+  Future<void> _syncSetlists() async {
     final engine = context.read<AudioEngine>();
-    final setlist = engine.currentSetlist;
+    final current = engine.currentSetlist;
 
     setState(() => _isSyncing = true);
     try {
-      // 1. Se a playlist local tiver músicas, salva na nuvem para a banda
-      if (setlist != null && setlist.songs.isNotEmpty) {
-        final success = await SupabaseService.saveSetlistToCloud(setlist);
+      if (current != null && current.songs.isNotEmpty) {
+        await SupabaseService.saveSetlistToCloud(current);
+      }
+      final cloudSetlists = await SupabaseService.fetchAllSetlists();
+      if (cloudSetlists.isNotEmpty && mounted) {
+        engine.setAllSetlists(cloudSetlists, selectId: current?.id);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(success
-                  ? '✅ Playlist (${setlist.songs.length} músicas) salva na nuvem para toda a banda!'
-                  : '⚠️ Falha ao salvar playlist na nuvem.'),
-              backgroundColor: success ? AppTheme.emeraldSafe : AppTheme.amberCue,
-            ),
-          );
-        }
-      } else {
-        // 2. Se a playlist local estiver vazia, tenta puxar a mais recente da nuvem
-        final cloudSetlist = await SupabaseService.fetchCurrentSetlist();
-        if (cloudSetlist != null && cloudSetlist.songs.isNotEmpty && mounted) {
-          engine.setCurrentSetlist(cloudSetlist);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('✅ Playlist "${cloudSetlist.title}" (${cloudSetlist.songs.length} músicas) carregada da nuvem!'),
+              content: Text('✅ Sincronizado com a nuvem! (${cloudSetlists.length} playlist(s) disponível(is))'),
               backgroundColor: AppTheme.emeraldSafe,
             ),
           );
-        } else {
-          // Sincroniza a playlist atual
-          if (setlist != null) {
-            await SupabaseService.saveSetlistToCloud(setlist);
-          }
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('✅ Sincronizado com a nuvem com sucesso! O repertório está atualizado.'),
-                backgroundColor: AppTheme.emeraldSafe,
-              ),
-            );
-          }
+        }
+      } else if (current != null) {
+        await SupabaseService.saveSetlistToCloud(current);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Playlist "${current.title}" salva na nuvem!'),
+              backgroundColor: AppTheme.emeraldSafe,
+            ),
+          );
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao sincronizar playlist: $e'), backgroundColor: AppTheme.roseMute),
+          SnackBar(content: Text('Erro ao sincronizar: $e'), backgroundColor: AppTheme.roseMute),
         );
       }
     } finally {
@@ -101,7 +87,181 @@ class _SetlistScreenState extends State<SetlistScreen> {
     }
   }
 
-  Future<void> _saveSetlistToCloud() => _syncSetlist();
+  Future<void> _saveSetlistToCloud() async {
+    final engine = context.read<AudioEngine>();
+    final current = engine.currentSetlist;
+    if (current != null) {
+      await SupabaseService.saveSetlistToCloud(current);
+    }
+  }
+
+  void _showCreatePlaylistDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.playlist_add, color: AppTheme.primary, size: 22),
+            SizedBox(width: 8),
+            Text('Criar Nova Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Dê um nome para a playlist (ex: Culto Domingo Manhã, Vigília, Jovens, Ensaio):',
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              style: const TextStyle(fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Ex: Culto Domingo Noite',
+                filled: true,
+                fillColor: AppTheme.background,
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () async {
+              final title = controller.text.trim();
+              if (title.isEmpty) return;
+              Navigator.pop(ctx);
+
+              final engine = context.read<AudioEngine>();
+              final newSetlist = engine.createNewSetlist(title);
+              SupabaseService.saveSetlistToCloud(newSetlist);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('✅ Playlist "$title" criada com sucesso!'),
+                  backgroundColor: AppTheme.emeraldSafe,
+                ),
+              );
+
+              // Abre direto a tela de escolher músicas para a nova playlist
+              _showAddSongsModal(context);
+            },
+            child: const Text('Criar Playlist', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRenamePlaylistDialog(BuildContext context, Setlist setlist) {
+    final controller = TextEditingController(text: setlist.title);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Renomear Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(fontSize: 14),
+          decoration: InputDecoration(
+            hintText: 'Novo nome da playlist...',
+            filled: true,
+            fillColor: AppTheme.background,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              final newTitle = controller.text.trim();
+              if (newTitle.isNotEmpty) {
+                final engine = context.read<AudioEngine>();
+                engine.updateSetlistTitle(setlist.id, newTitle);
+                SupabaseService.updateSetlistTitleOnCloud(setlist.id, newTitle);
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeletePlaylistDialog(BuildContext context, Setlist setlist) {
+    final engine = context.read<AudioEngine>();
+    if (engine.allSetlists.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Você precisa manter pelo menos uma playlist no aplicativo.'),
+          backgroundColor: AppTheme.amberCue,
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Excluir Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Deseja excluir a playlist "${setlist.title}"?\n\nAs músicas continuarão intactas no acervo geral da banda.',
+          style: const TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.roseMute, foregroundColor: Colors.white),
+            onPressed: () {
+              Navigator.pop(ctx);
+              engine.deleteSetlist(setlist.id);
+              SupabaseService.deleteSetlistFromCloud(setlist.id);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Playlist "${setlist.title}" excluída.'),
+                  backgroundColor: AppTheme.roseMute,
+                ),
+              );
+            },
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _showAddSongsModal(BuildContext context) {
     showModalBottomSheet(
@@ -213,7 +373,7 @@ class _SetlistScreenState extends State<SetlistScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'PLAYLIST DA SEMANA',
+              'PLAYLISTS & REPERTÓRIO',
               style: TextStyle(fontSize: 10, color: AppTheme.primary, fontWeight: FontWeight.bold),
             ),
             Text(
@@ -224,11 +384,16 @@ class _SetlistScreenState extends State<SetlistScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary),
+            tooltip: 'Criar Nova Playlist',
+            onPressed: () => _showCreatePlaylistDialog(context),
+          ),
+          IconButton(
             icon: _isSyncing
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary))
                 : const Icon(Icons.cloud_sync_outlined, color: AppTheme.primary),
-            tooltip: 'Sincronizar com a nuvem',
-            onPressed: _isSyncing ? null : _saveSetlistToCloud,
+            tooltip: 'Sincronizar playlists com a nuvem',
+            onPressed: _isSyncing ? null : _syncSetlists,
           ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
@@ -250,58 +415,193 @@ class _SetlistScreenState extends State<SetlistScreen> {
           padding: const EdgeInsets.all(12),
           child: Column(
             children: [
-              // Banner de Sincronia Offline
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF064E3B).withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.emeraldSafe.withOpacity(0.4)),
-                ),
-                child: Row(
+              // 1. BARRA HORIZONTAL DE SELEÇÃO DE PLAYLISTS
+              SizedBox(
+                height: 38,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
                   children: [
-                    Container(
-                      width: 22,
-                      height: 22,
-                      decoration: const BoxDecoration(
-                        color: AppTheme.emeraldSafe,
-                        shape: BoxShape.circle,
+                    // Botão Criar Nova Playlist
+                    InkWell(
+                      onTap: () => _showCreatePlaylistDialog(context),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.primary, width: 1.2),
+                        ),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.add, color: AppTheme.primary, size: 16),
+                            SizedBox(width: 4),
+                            Text(
+                              '+ Nova Playlist',
+                              style: TextStyle(
+                                color: AppTheme.primary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                      child: const Icon(Icons.check, size: 14, color: Colors.black),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Playlist da Semana (${setlist.songs.length} Músicas)',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                    // Lista das Playlists Existentes
+                    ...engine.allSetlists.map((s) {
+                      final isSelected = s.id == setlist.id;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: InkWell(
+                          onTap: () => engine.selectSetlist(s.id),
+                          borderRadius: BorderRadius.circular(10),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: isSelected ? AppTheme.primary : AppTheme.card,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: isSelected ? AppTheme.primary : AppTheme.cardBorder,
+                                width: isSelected ? 1.5 : 1.0,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isSelected ? Icons.playlist_play : Icons.queue_music,
+                                  size: 16,
+                                  color: isSelected ? Colors.black : Colors.white70,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  s.title,
+                                  style: TextStyle(
+                                    color: isSelected ? Colors.black : Colors.white,
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: isSelected ? Colors.black.withOpacity(0.25) : AppTheme.cardBorder,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${s.songs.length}',
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.black : Colors.white70,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          const Text(
-                            'Arraste pelo ícone ≡ para reordenar a ordem do culto',
-                            style: TextStyle(fontSize: 9, color: Colors.white70),
-                          ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    }),
                   ],
                 ),
               ),
               const SizedBox(height: 10),
 
-              // Lista de Músicas da Playlist com Reordenação
+              // 2. CABEÇALHO DA PLAYLIST ATIVA COM AÇÕES
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.cardBorder),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: AppTheme.emeraldSafe.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check, size: 16, color: AppTheme.emeraldSafe),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  setlist.title,
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              IconButton(
+                                icon: const Icon(Icons.edit_outlined, size: 15, color: Colors.white60),
+                                tooltip: 'Renomear playlist',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () => _showRenamePlaylistDialog(context, setlist),
+                              ),
+                            ],
+                          ),
+                          Text(
+                            '${setlist.songs.length} música(s) nesta playlist • Arraste ≡ para ordenar',
+                            style: const TextStyle(fontSize: 10, color: Colors.white54),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (engine.allSetlists.length > 1)
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline, size: 18, color: Colors.white38),
+                        tooltip: 'Excluir esta playlist',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => _showDeletePlaylistDialog(context, setlist),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // 3. LISTA DE MÚSICAS DA PLAYLIST COM REORDENAÇÃO
               Expanded(
                 child: setlist.songs.isEmpty
                     ? Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Text('Nenhuma música nesta playlist', style: TextStyle(color: Colors.white54)),
+                            const Icon(Icons.queue_music, size: 44, color: Colors.white24),
                             const SizedBox(height: 10),
-                            ElevatedButton(
+                            Text(
+                              'A playlist "${setlist.title}" está vazia',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text(
+                              'Adicione as músicas desejadas do acervo da banda.',
+                              style: TextStyle(color: Colors.white54, fontSize: 11),
+                            ),
+                            const SizedBox(height: 14),
+                            ElevatedButton.icon(
                               onPressed: () => _showAddSongsModal(context),
-                              child: const Text('Buscar no Acervo ou Enviar'),
+                              icon: const Icon(Icons.playlist_add, size: 16),
+                              label: const Text('Incluir Músicas Nesta Playlist', style: TextStyle(fontWeight: FontWeight.bold)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              ),
                             ),
                           ],
                         ),
@@ -518,9 +818,9 @@ class _AddSongsBottomSheetState extends State<_AddSongsBottomSheet> {
             children: [
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text('Adicionar à Playlist', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  Text('Busque no acervo da banda ou envie uma nova', style: TextStyle(fontSize: 11, color: Colors.white54)),
+                children: [
+                  Text('Adicionar à "${engine.currentSetlist?.title ?? "Playlist"}"', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                  const Text('Selecione as músicas do acervo para esta playlist', style: TextStyle(fontSize: 11, color: Colors.white54)),
                 ],
               ),
               IconButton(

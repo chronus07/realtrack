@@ -21,7 +21,7 @@ class AppUpdateInfo {
 }
 
 class UpdateService {
-  static const String currentVersion = '1.0.1';
+  static const String currentVersion = '1.0.2';
   static const String defaultDownloadUrl =
       'https://github.com/chronus07/realtrack/releases/download/latest/app-release.apk';
 

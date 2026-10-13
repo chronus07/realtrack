@@ -2,8 +2,8 @@ import 'song.dart';
 
 class Setlist {
   final String id;
-  final String title;
-  final DateTime date;
+  String title;
+  DateTime date;
   final List<Song> songs;
   bool isOfflineReady;
 

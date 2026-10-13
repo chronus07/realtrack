@@ -5,12 +5,14 @@ import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../models/setlist.dart';
 import 'pitch_shifter.dart';
+import 'supabase_service.dart';
 
 class AudioEngine extends ChangeNotifier {
   // ACERVO GERAL (Inicia 100% limpo, sem músicas de teste)
   final List<Song> _masterLibrary = [];
 
-  // PLAYLIST ATUAL (Inicia vazia para a banda criar)
+  // GESTÃO DE MÚLTIPLAS PLAYLISTS
+  final List<Setlist> _allSetlists = [];
   Setlist? _currentSetlist;
   int _currentSongIndex = 0;
   
@@ -30,6 +32,7 @@ class AudioEngine extends ChangeNotifier {
 
   // Getters
   List<Song> get masterLibrary => List.unmodifiable(_masterLibrary);
+  List<Setlist> get allSetlists => List.unmodifiable(_allSetlists);
   Setlist? get currentSetlist => _currentSetlist;
   int get currentSongIndex => _currentSongIndex;
   Song? get currentSong {
@@ -51,7 +54,7 @@ class AudioEngine extends ChangeNotifier {
     return PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
   }
 
-  // GESTÃO DO ACERVO & PLAYLISTS
+  // GESTÃO DO ACERVO
   void setLibrary(List<Song> songs) {
     _masterLibrary.clear();
     _masterLibrary.addAll(songs);
@@ -65,16 +68,124 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  void removeSongFromLibrary(String songId) {
+    _masterLibrary.removeWhere((s) => s.id == songId);
+    for (final setlist in _allSetlists) {
+      setlist.songs.removeWhere((s) => s.id == songId);
+    }
+    if (_currentSetlist != null && _currentSongIndex >= _currentSetlist!.songs.length) {
+      _currentSongIndex = (_currentSetlist!.songs.length - 1).clamp(0, 999);
+    }
+    notifyListeners();
+  }
+
+  // GESTÃO DE MÚLTIPLAS PLAYLISTS
+  void setAllSetlists(List<Setlist> list, {String? selectId}) {
+    if (list.isEmpty) {
+      if (_allSetlists.isEmpty) {
+        _initializeCleanState();
+      }
+      return;
+    }
+    _allSetlists.clear();
+    _allSetlists.addAll(list);
+
+    if (selectId != null) {
+      _currentSetlist = _allSetlists.firstWhere(
+        (s) => s.id == selectId,
+        orElse: () => _allSetlists.first,
+      );
+    } else if (_currentSetlist != null) {
+      _currentSetlist = _allSetlists.firstWhere(
+        (s) => s.id == _currentSetlist!.id,
+        orElse: () => _allSetlists.first,
+      );
+    } else {
+      _currentSetlist = _allSetlists.first;
+    }
+    _currentSongIndex = 0;
+    _pitchOffset = (_currentSetlist != null && _currentSetlist!.songs.isNotEmpty)
+        ? _currentSetlist!.songs[0].pitchOffsetSemitones
+        : 0;
+    notifyListeners();
+  }
+
+  void selectSetlist(String id) {
+    final found = _allSetlists.firstWhere((s) => s.id == id, orElse: () => _allSetlists.first);
+    _currentSetlist = found;
+    _currentSongIndex = 0;
+    _pitchOffset = found.songs.isNotEmpty ? found.songs[0].pitchOffsetSemitones : 0;
+    _isPlaying = false;
+    _playbackTicker?.cancel();
+    notifyListeners();
+  }
+
+  Setlist createNewSetlist(String title, {String? customId}) {
+    final cleanTitle = title.trim().isEmpty ? 'Nova Playlist' : title.trim();
+    final newSetlist = Setlist(
+      id: customId ?? SupabaseService.generateUuid(),
+      title: cleanTitle,
+      date: DateTime.now(),
+      isOfflineReady: true,
+      songs: [],
+    );
+    _allSetlists.insert(0, newSetlist);
+    _currentSetlist = newSetlist;
+    _currentSongIndex = 0;
+    _pitchOffset = 0;
+    notifyListeners();
+    return newSetlist;
+  }
+
+  void updateSetlistTitle(String id, String newTitle) {
+    final cleanTitle = newTitle.trim().isEmpty ? 'Playlist' : newTitle.trim();
+    for (final s in _allSetlists) {
+      if (s.id == id) {
+        s.title = cleanTitle;
+      }
+    }
+    if (_currentSetlist?.id == id) {
+      _currentSetlist!.title = cleanTitle;
+    }
+    notifyListeners();
+  }
+
+  void deleteSetlist(String id) {
+    _allSetlists.removeWhere((s) => s.id == id);
+    if (_allSetlists.isEmpty) {
+      _initializeCleanState();
+    } else if (_currentSetlist?.id == id) {
+      _currentSetlist = _allSetlists.first;
+      _currentSongIndex = 0;
+      _pitchOffset = _currentSetlist!.songs.isNotEmpty ? _currentSetlist!.songs[0].pitchOffsetSemitones : 0;
+    }
+    notifyListeners();
+  }
+
+  void addSongToSetlist(String setlistId, Song song) {
+    final target = _allSetlists.firstWhere((s) => s.id == setlistId, orElse: () => _currentSetlist!);
+    if (!target.songs.any((s) => s.id == song.id)) {
+      target.songs.add(song);
+      notifyListeners();
+    }
+  }
+
   void addSongToCurrentSetlist(Song song) {
     if (_currentSetlist != null) {
-      _currentSetlist!.songs.add(song);
-      notifyListeners();
+      if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
+        _currentSetlist!.songs.add(song);
+        notifyListeners();
+      }
     }
   }
 
   void addMultipleSongsToSetlist(List<Song> songs) {
     if (_currentSetlist != null) {
-      _currentSetlist!.songs.addAll(songs);
+      for (final song in songs) {
+        if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
+          _currentSetlist!.songs.add(song);
+        }
+      }
       notifyListeners();
     }
   }
@@ -90,6 +201,12 @@ class AudioEngine extends ChangeNotifier {
   }
 
   void setCurrentSetlist(Setlist setlist) {
+    final idx = _allSetlists.indexWhere((s) => s.id == setlist.id);
+    if (idx != -1) {
+      _allSetlists[idx] = setlist;
+    } else {
+      _allSetlists.add(setlist);
+    }
     _currentSetlist = setlist;
     _currentSongIndex = 0;
     _pitchOffset = (setlist.songs.isNotEmpty) ? setlist.songs[0].pitchOffsetSemitones : 0;
@@ -248,13 +365,16 @@ class AudioEngine extends ChangeNotifier {
   // Inicializa o sistema 100% limpo sem dados mockados
   void _initializeCleanState() {
     _masterLibrary.clear();
-    _currentSetlist = Setlist(
+    final defaultSetlist = Setlist(
       id: '00000000-0000-0000-0000-000000000001',
-      title: 'Playlist da Semana',
+      title: 'Culto Principal',
       date: DateTime.now(),
       isOfflineReady: true,
       songs: [],
     );
+    _allSetlists.clear();
+    _allSetlists.add(defaultSetlist);
+    _currentSetlist = defaultSetlist;
     _currentSongIndex = 0;
   }
 

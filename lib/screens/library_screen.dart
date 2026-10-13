@@ -72,6 +72,98 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  void _showAddToPlaylistSelector(Song song) {
+    final engine = context.read<AudioEngine>();
+    if (engine.allSetlists.length <= 1) {
+      final current = engine.currentSetlist;
+      if (current != null) {
+        if (!current.songs.any((s) => s.id == song.id)) {
+          engine.addSongToCurrentSetlist(song);
+          SupabaseService.saveSetlistToCloud(current);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('"${song.title}" adicionada à playlist "${current.title}"!'),
+              backgroundColor: AppTheme.emeraldSafe,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('"${song.title}" já está na playlist "${current.title}".'),
+              backgroundColor: AppTheme.amberCue,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          color: AppTheme.card,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.playlist_add, color: AppTheme.primary, size: 22),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Adicionar "${song.title}" em:',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 20),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ...engine.allSetlists.map((s) {
+              final inThis = s.songs.any((x) => x.id == song.id);
+              return ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                leading: Icon(
+                  inThis ? Icons.check_circle : Icons.queue_music,
+                  color: inThis ? AppTheme.emeraldSafe : AppTheme.primary,
+                ),
+                title: Text(s.title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                subtitle: Text('${s.songs.length} música(s)'),
+                trailing: inThis
+                    ? const Text('Já inclusa', style: TextStyle(color: AppTheme.emeraldSafe, fontSize: 11))
+                    : const Icon(Icons.add_circle_outline, color: AppTheme.primary, size: 20),
+                onTap: () {
+                  if (!inThis) {
+                    engine.addSongToSetlist(s.id, song);
+                    SupabaseService.saveSetlistToCloud(s);
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('"${song.title}" adicionada à playlist "${s.title}"!'),
+                        backgroundColor: AppTheme.emeraldSafe,
+                      ),
+                    );
+                  }
+                },
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final engine = context.watch<AudioEngine>();
@@ -268,21 +360,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                           isInCurrentSetlist ? Icons.check_circle : Icons.playlist_add,
                                           color: isInCurrentSetlist ? AppTheme.emeraldSafe : AppTheme.primary,
                                         ),
-                                        tooltip: isInCurrentSetlist
-                                            ? 'Já na playlist atual'
-                                            : 'Adicionar à playlist da semana',
-                                        onPressed: () {
-                                          if (!isInCurrentSetlist) {
-                                            engine.addSongToCurrentSetlist(song);
-                                            ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('"${song.title}" adicionada à playlist!'),
-                                                backgroundColor: AppTheme.emeraldSafe,
-                                                duration: const Duration(seconds: 2),
-                                              ),
-                                            );
-                                          }
-                                        },
+                                        tooltip: 'Adicionar a uma playlist',
+                                        onPressed: () => _showAddToPlaylistSelector(song),
                                       ),
                                       IconButton(
                                         icon: const Icon(Icons.delete_outline, size: 18, color: Colors.white30),
