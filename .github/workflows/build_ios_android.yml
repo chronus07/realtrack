@@ -124,6 +124,9 @@ jobs:
       - name: Build Flutter Web PWA
         run: flutter build web --release --base-href /realtrack/
 
+      - name: Copy Extra Web Files
+        run: cp web/simulator.html build/web/simulator.html || true
+
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
