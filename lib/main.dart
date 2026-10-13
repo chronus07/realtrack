@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/audio_engine.dart';
+import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/setlist_screen.dart';
 import 'screens/mixer_screen.dart';
 import 'screens/chords_screen.dart';
 import 'screens/upload_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Inicializa a nuvem se as chaves estiverem configuradas
+  try {
+    await SupabaseService.initialize();
+  } catch (e) {
+    debugPrint('Supabase inicializado em modo offline/demonstração: $e');
+  }
+
   runApp(
     MultiProvider(
       providers: [
