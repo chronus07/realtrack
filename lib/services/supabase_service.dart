@@ -282,27 +282,35 @@ class SupabaseService {
     }
   }
 
+  static bool isValidUuid(String id) {
+    final regex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    return regex.hasMatch(id);
+  }
+
   /// Salva ou sincroniza a playlist semanal no Supabase
   static Future<bool> saveSetlistToCloud(Setlist setlist) async {
     if (!AppConfig.isConfigured) return false;
     try {
+      final validSetlistId = isValidUuid(setlist.id) ? setlist.id : '00000000-0000-0000-0000-000000000001';
       await client.from('setlists').upsert({
-        'id': setlist.id,
+        'id': validSetlistId,
         'title': setlist.title,
         'event_date': setlist.date.toIso8601String(),
       });
 
-      await client.from('setlist_songs').delete().eq('setlist_id', setlist.id);
+      await client.from('setlist_songs').delete().eq('setlist_id', validSetlistId);
 
       for (int i = 0; i < setlist.songs.length; i++) {
         final song = setlist.songs[i];
-        await client.from('setlist_songs').insert({
-          'setlist_id': setlist.id,
-          'song_id': song.id,
-          'order_index': i + 1,
-          'custom_key': song.currentKey,
-          'pitch_offset': song.pitchOffsetSemitones,
-        });
+        if (isValidUuid(song.id)) {
+          await client.from('setlist_songs').insert({
+            'setlist_id': validSetlistId,
+            'song_id': song.id,
+            'order_index': i + 1,
+            'custom_key': song.currentKey,
+            'pitch_offset': song.pitchOffsetSemitones,
+          });
+        }
       }
       return true;
     } catch (e) {

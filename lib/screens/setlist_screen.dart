@@ -45,34 +45,63 @@ class _SetlistScreenState extends State<SetlistScreen> {
     }
   }
 
-  Future<void> _saveSetlistToCloud() async {
+  Future<void> _syncSetlist() async {
     final engine = context.read<AudioEngine>();
     final setlist = engine.currentSetlist;
-    if (setlist == null) return;
 
     setState(() => _isSyncing = true);
     try {
-      final success = await SupabaseService.saveSetlistToCloud(setlist);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(success
-                ? '✅ Playlist da semana salva na nuvem para toda a banda!'
-                : '⚠️ Não foi possível sincronizar com a nuvem.'),
-            backgroundColor: success ? AppTheme.emeraldSafe : AppTheme.amberCue,
-          ),
-        );
+      // 1. Se a playlist local tiver músicas, salva na nuvem para a banda
+      if (setlist != null && setlist.songs.isNotEmpty) {
+        final success = await SupabaseService.saveSetlistToCloud(setlist);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(success
+                  ? '✅ Playlist (${setlist.songs.length} músicas) salva na nuvem para toda a banda!'
+                  : '⚠️ Falha ao salvar playlist na nuvem.'),
+              backgroundColor: success ? AppTheme.emeraldSafe : AppTheme.amberCue,
+            ),
+          );
+        }
+      } else {
+        // 2. Se a playlist local estiver vazia, tenta puxar a mais recente da nuvem
+        final cloudSetlist = await SupabaseService.fetchCurrentSetlist();
+        if (cloudSetlist != null && cloudSetlist.songs.isNotEmpty && mounted) {
+          engine.setCurrentSetlist(cloudSetlist);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Playlist "${cloudSetlist.title}" (${cloudSetlist.songs.length} músicas) carregada da nuvem!'),
+              backgroundColor: AppTheme.emeraldSafe,
+            ),
+          );
+        } else {
+          // Sincroniza a playlist atual
+          if (setlist != null) {
+            await SupabaseService.saveSetlistToCloud(setlist);
+          }
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('✅ Sincronizado com a nuvem com sucesso! O repertório está atualizado.'),
+                backgroundColor: AppTheme.emeraldSafe,
+              ),
+            );
+          }
+        }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erro ao salvar playlist: $e'), backgroundColor: AppTheme.roseMute),
+          SnackBar(content: Text('Erro ao sincronizar playlist: $e'), backgroundColor: AppTheme.roseMute),
         );
       }
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
   }
+
+  Future<void> _saveSetlistToCloud() => _syncSetlist();
 
   void _showAddSongsModal(BuildContext context) {
     showModalBottomSheet(

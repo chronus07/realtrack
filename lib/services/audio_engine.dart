@@ -249,7 +249,7 @@ class AudioEngine extends ChangeNotifier {
   void _initializeCleanState() {
     _masterLibrary.clear();
     _currentSetlist = Setlist(
-      id: 'setlist-1',
+      id: '00000000-0000-0000-0000-000000000001',
       title: 'Playlist da Semana',
       date: DateTime.now(),
       isOfflineReady: true,
