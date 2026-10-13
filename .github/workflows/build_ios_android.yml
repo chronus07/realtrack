@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java (JDK 17)
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -32,6 +32,24 @@ jobs:
 
       - name: Generate Android Native Platform
         run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=android
+
+      - name: Configure Android SDK 36 for Plugins
+        run: |
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle || true
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle || true
+          cat << 'EOF' >> android/build.gradle
+
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 36
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "android.suppressUnsupportedCompileSdk=36" >> android/gradle.properties
 
       - name: Install Dependencies
         run: flutter pub get
