@@ -8,6 +8,7 @@ import 'supabase_service.dart';
 class AudioCacheService {
   static final Map<String, double> _downloadProgress = {};
   static final Set<String> _activeDownloads = {};
+  static bool _isPrefetching = false;
 
   static double getProgress(String storagePath) => _downloadProgress[storagePath] ?? 0.0;
   static bool isDownloading(String storagePath) => _activeDownloads.contains(storagePath);
@@ -29,12 +30,12 @@ class AudioCacheService {
     return File('${dir.path}/$safeName');
   }
 
-  /// Verifica se o arquivo de áudio já foi baixado para o aparelho
+  /// Verifica se o arquivo de áudio já foi baixado para o aparelho e está íntegro
   static Future<String?> getLocalPathIfExists(String storagePath) async {
     if (kIsWeb) return null;
     try {
       final file = await _getLocalFile(storagePath);
-      if (await file.exists() && await file.length() > 0) {
+      if (await file.exists() && await file.length() > 1024) {
         return file.path;
       }
     } catch (e) {
@@ -43,23 +44,21 @@ class AudioCacheService {
     return null;
   }
 
-  /// Retorna o arquivo local se existir, ou baixa da nuvem em segundo plano
+  /// Retorna o arquivo local se existir, ou baixa da nuvem de forma segura
   static Future<String> getOrDownloadAudio(
     String storagePath, {
     void Function(double progress)? onProgress,
   }) async {
-    // Na Web, sempre usa streaming direto
     if (kIsWeb) {
       return SupabaseService.getAudioUrl(storagePath);
     }
 
     try {
       final file = await _getLocalFile(storagePath);
-      if (await file.exists() && await file.length() > 0) {
+      if (await file.exists() && await file.length() > 1024) {
         return file.path;
       }
 
-      // Se já está baixando, aguarda ou faz streaming temporário
       if (_activeDownloads.contains(storagePath)) {
         return SupabaseService.getAudioUrl(storagePath);
       }
@@ -104,7 +103,7 @@ class AudioCacheService {
         _activeDownloads.remove(storagePath);
         _downloadProgress[storagePath] = 1.0;
 
-        if (await file.exists() && await file.length() > 0) {
+        if (await file.exists() && await file.length() > 1024) {
           return file.path;
         }
       }
@@ -118,16 +117,25 @@ class AudioCacheService {
     return SupabaseService.getAudioUrl(storagePath);
   }
 
-  /// Baixa todas as pistas de uma música em segundo plano para tocar offline e sem latência
+  /// Baixa todas as pistas de uma música uma por uma em segundo plano sem saturar a rede
   static Future<void> prefetchSong(Song song) async {
-    if (kIsWeb) return;
-    for (final stem in song.stems) {
-      if (stem.filePath != null && stem.filePath!.isNotEmpty) {
-        final local = await getLocalPathIfExists(stem.filePath!);
-        if (local == null) {
-          getOrDownloadAudio(stem.filePath!);
+    if (kIsWeb || _isPrefetching) return;
+    _isPrefetching = true;
+    try {
+      for (final stem in song.stems) {
+        if (stem.filePath != null && stem.filePath!.isNotEmpty) {
+          final local = await getLocalPathIfExists(stem.filePath!);
+          if (local == null) {
+            await getOrDownloadAudio(stem.filePath!);
+            // Intervalo suave de 400ms entre downloads para não travar conexões 4G/Wi-Fi
+            await Future.delayed(const Duration(milliseconds: 400));
+          }
         }
       }
+    } catch (e) {
+      debugPrint('Erro durante prefetch sequencial: $e');
+    } finally {
+      _isPrefetching = false;
     }
   }
 }

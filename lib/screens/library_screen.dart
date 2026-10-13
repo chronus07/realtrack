@@ -57,11 +57,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.roseMute),
             onPressed: () async {
               Navigator.pop(ctx);
-              await SupabaseService.deleteSongFromLibrary(song.id);
-              _syncLibraryFromCloud();
+              final engine = context.read<AudioEngine>();
+              await engine.removeSongFromLibrary(song.id);
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Música "${song.title}" excluída.')),
+                  SnackBar(content: Text('Música "${song.title}" excluída do acervo e playlists.')),
                 );
               }
             },

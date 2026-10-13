@@ -34,11 +34,15 @@ class AudioEngine extends ChangeNotifier {
   double _totalDurationSeconds = 240.0;
   int _currentBar = 1;
   int _currentBeat = 1;
+  int _lastNotifiedMillis = 0;
+
   Timer? _playbackTicker;
   Timer? _driftCheckTimer;
   Timer? _cloudSyncTimer;
   RealtimeChannel? _realtimeChannel;
   bool _isSyncingCloud = false;
+
+  final Map<String, int> _lastStemSeekTimes = {};
 
   AudioEngine() {
     _initializeCleanState();
@@ -78,7 +82,6 @@ class AudioEngine extends ChangeNotifier {
   void startCloudAutoSync() {
     _setupRealtimeSubscription();
     _cloudSyncTimer?.cancel();
-    // Heartbeat automático a cada 10s para garantir atualização mesmo em conexões instáveis
     _cloudSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       syncFromCloudSilently();
     });
@@ -251,7 +254,6 @@ class AudioEngine extends ChangeNotifier {
     _pitchOffset = 0;
     notifyListeners();
 
-    // Sincroniza imediatamente na nuvem
     SupabaseService.saveSetlistToCloud(newSetlist);
     return newSetlist;
   }
@@ -376,6 +378,7 @@ class AudioEngine extends ChangeNotifier {
     }
     _stemPlayers.clear();
     _masterStemId = null;
+    _lastStemSeekTimes.clear();
   }
 
   void togglePlay() {
@@ -398,97 +401,127 @@ class AudioEngine extends ChangeNotifier {
     try {
       WakelockPlus.enable();
 
-      // Se ainda não inicializamos os players para a música atual
+      // 1. Inicializa os players se ainda não existirem
       if (_stemPlayers.isEmpty) {
         final anySolo = song.stems.any((s) => s.isSolo);
 
-        // Identifica a faixa master (Click, Guia ou a primeira disponível)
+        // Identifica faixa master (preferência por Click ou Guia)
         final masterStem = song.stems.firstWhere(
           (s) => s.name.toUpperCase().contains('CLICK') || s.name.toUpperCase().contains('GUIA'),
           orElse: () => song.stems.first,
         );
         _masterStemId = masterStem.id;
 
-        // Prepara todas as faixas em paralelo
-        final initFutures = song.stems.map((stem) async {
-          if (stem.filePath == null || stem.filePath!.isEmpty) return;
+        // Inicializa todas as faixas com tratamento individual para nenhuma travar as outras
+        final List<Future<void>> initTasks = [];
 
-          final player = AudioPlayer();
-          _stemPlayers[stem.id] = player;
+        for (final stem in song.stems) {
+          if (stem.filePath == null || stem.filePath!.isEmpty) continue;
 
-          Source source;
-          final localPath = await AudioCacheService.getLocalPathIfExists(stem.filePath!);
-          if (localPath != null && !kIsWeb) {
-            source = DeviceFileSource(localPath);
-          } else {
-            final url = SupabaseService.getAudioUrl(stem.filePath!);
-            source = UrlSource(url);
-          }
-
-          await player.setPlayerMode(PlayerMode.mediaPlayer);
-          await player.setReleaseMode(ReleaseMode.stop);
-          await player.setSource(source);
-
-          // Configura volume inicial
-          final effVol = stem.getEffectiveVolume(anySolo);
-          await player.setVolume(effVol);
-
-          // Roteamento de PAN individual por faixa
-          if (!kIsWeb) {
+          initTasks.add(() async {
             try {
-              await player.setBalance(stem.pan);
-            } catch (_) {}
-          }
+              final player = AudioPlayer();
 
-          // Apenas o player master monitora duração e posição para evitar conflitos na UI
-          if (stem.id == _masterStemId) {
-            player.onDurationChanged.listen((dur) {
-              if (dur.inMilliseconds > 0) {
-                _totalDurationSeconds = dur.inMilliseconds / 1000.0;
-                notifyListeners();
+              try {
+                await player.setReleaseMode(ReleaseMode.stop);
+              } catch (_) {}
+
+              Source source;
+              final localPath = await AudioCacheService.getLocalPathIfExists(stem.filePath!);
+              if (localPath != null && !kIsWeb) {
+                source = DeviceFileSource(localPath);
+              } else {
+                final url = SupabaseService.getAudioUrl(stem.filePath!);
+                source = UrlSource(url);
               }
-            });
 
-            player.onPositionChanged.listen((pos) {
-              _currentPositionSeconds = pos.inMilliseconds / 1000.0;
-              final bpm = song.bpm;
-              final beatsPerSecond = bpm / 60.0;
-              final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
-              _currentBar = (totalBeats / 4).toInt() + 1;
-              _currentBeat = (totalBeats % 4) + 1;
-              notifyListeners();
-            });
+              await player.setSource(source);
 
-            player.onPlayerComplete.listen((_) {
-              stop();
-            });
-          }
-        }).toList();
+              final effVol = stem.getEffectiveVolume(anySolo);
+              await player.setVolume(effVol);
 
-        await Future.wait(initFutures);
+              if (!kIsWeb) {
+                try {
+                  await player.setBalance(stem.pan);
+                } catch (_) {}
+              }
 
-        // Dispara o download em cache silencioso em segundo plano para futuras execuções
-        AudioCacheService.prefetchSong(song);
+              _stemPlayers[stem.id] = player;
+
+              // Apenas o master escuta position para evitar sobrecarga de rebuilds
+              if (stem.id == _masterStemId) {
+                player.onDurationChanged.listen((dur) {
+                  if (dur.inMilliseconds > 0) {
+                    _totalDurationSeconds = dur.inMilliseconds / 1000.0;
+                    notifyListeners();
+                  }
+                });
+
+                player.onPositionChanged.listen((pos) {
+                  final millis = pos.inMilliseconds;
+                  _currentPositionSeconds = millis / 1000.0;
+
+                  final bpm = song.bpm;
+                  final beatsPerSecond = bpm / 60.0;
+                  final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
+                  final bar = (totalBeats / 4).toInt() + 1;
+                  final beat = (totalBeats % 4) + 1;
+
+                  // Throttling: notifica a cada 250ms ou quando mudar o compasso/tempo
+                  if (bar != _currentBar || beat != _currentBeat || (millis - _lastNotifiedMillis).abs() >= 250) {
+                    _currentBar = bar;
+                    _currentBeat = beat;
+                    _lastNotifiedMillis = millis;
+                    notifyListeners();
+                  }
+                });
+
+                player.onPlayerComplete.listen((_) {
+                  stop();
+                });
+              }
+            } catch (stemErr) {
+              debugPrint('Aviso: Pista ${stem.name} não pôde ser inicializada: $stemErr');
+            }
+          }());
+        }
+
+        await Future.wait(initTasks);
       }
 
       if (_stemPlayers.isEmpty) {
-        // Fallback simulador caso seja uma música de teste sem pistas reais
+        // Fallback simulador se não houver áudios válidos
         _startTicker();
       } else {
-        // Garante que todas as pistas comecem exatamente na mesma posição
+        // Se a posição for maior que 0, posiciona todas
         final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
         if (_currentPositionSeconds > 0) {
-          await Future.wait(_stemPlayers.values.map((p) => p.seek(seekPos)));
+          final seekFutures = _stemPlayers.values.map((p) async {
+            try {
+              await p.seek(seekPos);
+            } catch (_) {}
+          });
+          await Future.wait(seekFutures);
         }
 
-        // DISPARO SIMULTÂNEO VIA FUTURE.WAIT (Zero latência de descompasso)
-        await Future.wait(_stemPlayers.values.map((p) => p.resume()));
+        // DISPARO SIMULTÂNEO VIA FUTURE.WAIT
+        final resumeFutures = _stemPlayers.values.map((p) async {
+          try {
+            await p.resume();
+          } catch (e) {
+            debugPrint('Erro ao iniciar player: $e');
+          }
+        });
+        await Future.wait(resumeFutures);
 
-        // Inicia o Watchdog de alinhamento de drift contínuo
+        // Inicia o monitor de alinhamento suave (a cada 3.0s, sem travamentos)
         _startDriftCompensation();
+
+        // Download suave em cache no mobile em segundo plano
+        AudioCacheService.prefetchSong(song);
       }
     } catch (e) {
-      debugPrint('Erro ao iniciar multitracks: $e');
+      debugPrint('Erro ao iniciar áudio: $e');
       _startTicker();
     } finally {
       _isLoadingAudio = false;
@@ -496,14 +529,21 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
-  /// Watchdog de drift: verifica a cada 600ms se alguma pista saiu do compasso e realinha
+  /// Watchdog de drift suave: a cada 3.0s verifica se alguma pista divergiu mais de 250ms
   void _startDriftCompensation() {
     _driftCheckTimer?.cancel();
-    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 600), (_) async {
+    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 3000), (_) async {
       if (!_isPlaying || _stemPlayers.isEmpty) return;
+
+      final now = DateTime.now().millisecondsSinceEpoch;
 
       for (final entry in _stemPlayers.entries) {
         if (entry.key == _masterStemId) continue;
+
+        // Evita reajustar a mesma pista com intervalo menor que 5 segundos
+        final lastSeek = _lastStemSeekTimes[entry.key] ?? 0;
+        if (now - lastSeek < 5000) continue;
+
         final player = entry.value;
 
         try {
@@ -511,9 +551,10 @@ class AudioEngine extends ChangeNotifier {
           if (pos != null) {
             final trackSec = pos.inMilliseconds / 1000.0;
             final diff = (trackSec - _currentPositionSeconds).abs();
-            // Se houver mais de 50ms de defasagem, realinha imediatamente
-            if (diff > 0.050) {
-              player.seek(Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()));
+            // Apenas reajusta se a defasagem for perceptível (> 250ms)
+            if (diff > 0.250) {
+              _lastStemSeekTimes[entry.key] = now;
+              await player.seek(Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()));
             }
           }
         } catch (_) {}
@@ -527,7 +568,12 @@ class AudioEngine extends ChangeNotifier {
     _playbackTicker?.cancel();
     WakelockPlus.disable();
 
-    await Future.wait(_stemPlayers.values.map((p) => p.pause()));
+    final pauseFutures = _stemPlayers.values.map((p) async {
+      try {
+        await p.pause();
+      } catch (_) {}
+    });
+    await Future.wait(pauseFutures);
     notifyListeners();
   }
 
@@ -540,9 +586,11 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = 1;
     WakelockPlus.disable();
 
+    // Mantém players em estado Pausado na posição zero (evita IllegalStateException no Android)
     for (final player in _stemPlayers.values) {
       try {
-        player.stop();
+        player.pause();
+        player.seek(Duration.zero);
       } catch (_) {}
     }
     notifyListeners();

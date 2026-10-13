@@ -66,6 +66,9 @@ class _UploadScreenState extends State<UploadScreen> {
             );
           }
         }
+        if (_selectedStems.length > 1) {
+          _isMultiTrack = true;
+        }
       });
     }
   }
@@ -129,13 +132,15 @@ class _UploadScreenState extends State<UploadScreen> {
 
       // 1. Tenta fazer o upload real para o Supabase Storage + Database
       try {
+        final bool isReallyMulti = _selectedStems.length > 1 || _isMultiTrack;
+
         createdSong = await SupabaseService.uploadNewSong(
           title: title,
           artist: artist.isEmpty ? 'Banda' : artist,
           originalKey: _selectedKey,
           bpm: bpm,
           timeSignature: _selectedTimeSignature,
-          isMultiTrack: _isMultiTrack,
+          isMultiTrack: isReallyMulti,
           chordsText: _chordsController.text,
           stemsToUpload: _selectedStems,
           onProgress: (prog, status) {
@@ -166,6 +171,8 @@ class _UploadScreenState extends State<UploadScreen> {
           );
         }).toList();
 
+        final bool isReallyMulti = _selectedStems.length > 1 || _isMultiTrack;
+
         createdSong = Song(
           id: 'song-${DateTime.now().millisecondsSinceEpoch}',
           title: title,
@@ -173,14 +180,15 @@ class _UploadScreenState extends State<UploadScreen> {
           originalKey: _selectedKey,
           bpm: bpm,
           timeSignature: _selectedTimeSignature,
-          isMultiTrack: _isMultiTrack,
+          isMultiTrack: isReallyMulti,
           chordsText: _chordsController.text,
           stems: stems,
         );
       }
 
-      // 3. Salva no Acervo Geral do AudioEngine
+      // 3. Salva no Acervo Geral do AudioEngine e sincroniza
       engine.addSongToLibrary(createdSong);
+      engine.syncFromCloudSilently();
 
       setState(() {
         _isUploading = false;

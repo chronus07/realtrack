@@ -57,6 +57,8 @@ class SupabaseService {
           );
         }).toList();
 
+        final bool isMulti = stems.length > 1 || (row['is_multitrack'] ?? true);
+
         songs.add(
           Song(
             id: row['id'],
@@ -65,7 +67,7 @@ class SupabaseService {
             originalKey: row['original_key'] ?? 'G',
             bpm: row['bpm'] ?? 120,
             timeSignature: row['time_signature'] ?? '4/4',
-            isMultiTrack: row['is_multitrack'] ?? true,
+            isMultiTrack: isMulti,
             chordsText: row['chords_text'] ?? '',
             stems: stems,
           ),
@@ -182,10 +184,12 @@ class SupabaseService {
     }
   }
 
-  /// Remove uma música do Acervo Geral
+  /// Remove uma música do Acervo Geral e limpa referências em playlists
   static Future<bool> deleteSongFromLibrary(String songId) async {
     if (!AppConfig.isConfigured) return false;
     try {
+      await client.from('setlist_songs').delete().eq('song_id', songId);
+      await client.from('song_stems').delete().eq('song_id', songId);
       await client.from('songs').delete().eq('id', songId);
       return true;
     } catch (e) {
@@ -285,7 +289,7 @@ class SupabaseService {
                 pitchOffsetSemitones: pitchOffset,
                 bpm: songData['bpm'] ?? 120,
                 timeSignature: songData['time_signature'] ?? '4/4',
-                isMultiTrack: songData['is_multitrack'] ?? true,
+                isMultiTrack: stems.length > 1 || (songData['is_multitrack'] ?? true),
                 chordsText: songData['chords_text'] ?? '',
                 stems: stems,
               ),
