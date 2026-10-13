@@ -13,6 +13,7 @@ class StemTrack {
   bool isMuted;
   bool isSolo;
   OutputChannel outputChannel;
+  double pan; // -1.0 (Total L) a +1.0 (Total R), 0.0 = Centro
 
   StemTrack({
     required this.id,
@@ -23,13 +24,27 @@ class StemTrack {
     this.isMuted = false,
     this.isSolo = false,
     OutputChannel? outputChannel,
-  }) : outputChannel = outputChannel ?? (isCue ? OutputChannel.left : OutputChannel.right);
+    double? pan,
+  })  : outputChannel = outputChannel ?? (isCue ? OutputChannel.left : OutputChannel.right),
+        pan = pan ?? (isCue ? -1.0 : 1.0);
 
   // Calcula o volume real considerando Solo e Mute
   double getEffectiveVolume(bool anySoloActive) {
     if (isMuted) return 0.0;
     if (anySoloActive && !isSolo) return 0.0;
     return volume;
+  }
+
+  // Define o Pan e atualiza o canal correspondente
+  void setPan(double newPan) {
+    pan = newPan.clamp(-1.0, 1.0);
+    if (pan <= -0.5) {
+      outputChannel = OutputChannel.left;
+    } else if (pan >= 0.5) {
+      outputChannel = OutputChannel.right;
+    } else {
+      outputChannel = OutputChannel.stereo;
+    }
   }
 
   StemTrack copyWith({
@@ -41,6 +56,7 @@ class StemTrack {
     bool? isMuted,
     bool? isSolo,
     OutputChannel? outputChannel,
+    double? pan,
   }) {
     return StemTrack(
       id: id ?? this.id,
@@ -51,6 +67,7 @@ class StemTrack {
       isMuted: isMuted ?? this.isMuted,
       isSolo: isSolo ?? this.isSolo,
       outputChannel: outputChannel ?? this.outputChannel,
+      pan: pan ?? this.pan,
     );
   }
 }

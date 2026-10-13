@@ -21,13 +21,14 @@ class TransportBar extends StatelessWidget {
     final isPlaying = engine.isPlaying;
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppTheme.cardBorder),
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           // Informações de tempo e compasso
           Row(
@@ -41,14 +42,14 @@ class TransportBar extends StatelessWidget {
                 children: [
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
-                    width: 8,
-                    height: 8,
+                    width: 7,
+                    height: 7,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: isPlaying ? AppTheme.primary : Colors.white24,
                     ),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   Text(
                     'COMPASSO ${engine.currentBar} [${engine.currentBeat}]',
                     style: const TextStyle(
@@ -66,68 +67,73 @@ class TransportBar extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 6),
 
           // Barra de progresso linear
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
               trackHeight: 3,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
             ),
             child: Slider(
-              value: currentPos.clamp(0.0, totalPos),
+              value: currentPos.clamp(0.0, totalPos > 0 ? totalPos : 1.0),
               min: 0.0,
-              max: totalPos,
+              max: totalPos > 0 ? totalPos : 1.0,
               onChanged: (val) => engine.seekTo(val),
             ),
           ),
-          const SizedBox(height: 8),
 
           // Botões de Transporte
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(
-                icon: const Icon(Icons.skip_previous, size: 28),
+                icon: const Icon(Icons.skip_previous, size: 26),
                 color: Colors.white70,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 onPressed: engine.previousSong,
               ),
               GestureDetector(
                 onTap: engine.togglePlay,
                 child: Container(
-                  width: 56,
-                  height: 56,
+                  width: 50,
+                  height: 50,
                   decoration: BoxDecoration(
                     color: AppTheme.primary,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: AppTheme.primary.withOpacity(0.4),
-                        blurRadius: 12,
-                        spreadRadius: 2,
+                        color: AppTheme.primary.withOpacity(0.35),
+                        blurRadius: 10,
+                        spreadRadius: 1,
                       ),
                     ],
                   ),
                   child: engine.isLoadingAudio
                       ? const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: CircularProgressIndicator(strokeWidth: 3, color: Colors.black),
+                          padding: EdgeInsets.all(12),
+                          child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.black),
                         )
                       : Icon(
                           isPlaying ? Icons.pause : Icons.play_arrow,
-                          size: 32,
+                          size: 30,
                           color: Colors.black,
                         ),
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.skip_next, size: 28),
+                icon: const Icon(Icons.skip_next, size: 26),
                 color: Colors.white70,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 onPressed: engine.nextSong,
               ),
               IconButton(
-                icon: const Icon(Icons.stop, size: 24),
+                icon: const Icon(Icons.stop, size: 22),
                 color: Colors.white54,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                 onPressed: engine.stop,
               ),
             ],

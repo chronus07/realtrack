@@ -1,29 +1,33 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../config/app_config.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../models/setlist.dart';
+import 'audio_cache_service.dart';
 import 'pitch_shifter.dart';
 import 'supabase_service.dart';
 
 class AudioEngine extends ChangeNotifier {
-  // ACERVO GERAL (Inicia 100% limpo, sem músicas de teste)
+  // ACERVO GERAL (Sincronizado com o Supabase)
   final List<Song> _masterLibrary = [];
 
   // GESTÃO DE MÚLTIPLAS PLAYLISTS
   final List<Setlist> _allSetlists = [];
   Setlist? _currentSetlist;
   int _currentSongIndex = 0;
-  
+
   // PLAYERS DE ÁUDIO REAL PARA AS PISTAS
   final Map<String, AudioPlayer> _stemPlayers = {};
+  String? _masterStemId;
   bool _isLoadingAudio = false;
   bool get isLoadingAudio => _isLoadingAudio;
 
   bool _isPlaying = false;
-  bool _isSplitModeActive = true; // True = Modo Show (L: Click/Guia | R: P.A.)
+  bool _isSplitModeActive = true; // True = Modo Palco/Cabo Y (L: Click/Guia | R: P.A.)
   int _pitchOffset = 0;           // -6 a +6 semitons
 
   double _currentPositionSeconds = 0.0;
@@ -31,9 +35,15 @@ class AudioEngine extends ChangeNotifier {
   int _currentBar = 1;
   int _currentBeat = 1;
   Timer? _playbackTicker;
+  Timer? _driftCheckTimer;
+  Timer? _cloudSyncTimer;
+  RealtimeChannel? _realtimeChannel;
+  bool _isSyncingCloud = false;
 
   AudioEngine() {
     _initializeCleanState();
+    startCloudAutoSync();
+    syncFromCloudSilently();
   }
 
   // Getters
@@ -53,6 +63,7 @@ class AudioEngine extends ChangeNotifier {
   double get totalDurationSeconds => _totalDurationSeconds;
   int get currentBar => _currentBar;
   int get currentBeat => _currentBeat;
+  bool get isSyncingCloud => _isSyncingCloud;
 
   String get currentKey {
     final song = currentSong;
@@ -60,7 +71,100 @@ class AudioEngine extends ChangeNotifier {
     return PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
   }
 
-  // GESTÃO DO ACERVO
+  // ==========================================
+  // SINCRONIZAÇÃO EM TEMPO REAL ENTRE DISPOSITIVOS
+  // ==========================================
+
+  void startCloudAutoSync() {
+    _setupRealtimeSubscription();
+    _cloudSyncTimer?.cancel();
+    // Heartbeat automático a cada 10s para garantir atualização mesmo em conexões instáveis
+    _cloudSyncTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      syncFromCloudSilently();
+    });
+  }
+
+  void _setupRealtimeSubscription() {
+    if (!AppConfig.isConfigured) return;
+    try {
+      _realtimeChannel = SupabaseService.client.channel('realtracks_live_sync');
+      _realtimeChannel!.onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'setlists',
+        callback: (payload) {
+          debugPrint('📡 [Realtime] Atualização em setlists: ${payload.eventType}');
+          syncFromCloudSilently();
+        },
+      );
+      _realtimeChannel!.onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'setlist_songs',
+        callback: (payload) {
+          debugPrint('📡 [Realtime] Atualização em setlist_songs: ${payload.eventType}');
+          syncFromCloudSilently();
+        },
+      );
+      _realtimeChannel!.onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'public',
+        table: 'songs',
+        callback: (payload) {
+          debugPrint('📡 [Realtime] Atualização no acervo songs: ${payload.eventType}');
+          syncFromCloudSilently();
+        },
+      );
+      _realtimeChannel!.subscribe();
+    } catch (e) {
+      debugPrint('Erro ao conectar Supabase Realtime: $e');
+    }
+  }
+
+  Future<void> syncFromCloudSilently() async {
+    if (!AppConfig.isConfigured || _isSyncingCloud) return;
+    _isSyncingCloud = true;
+
+    try {
+      // 1. Atualiza Acervo Geral
+      final cloudSongs = await SupabaseService.fetchAllLibrarySongs();
+      if (cloudSongs.isNotEmpty) {
+        _masterLibrary.clear();
+        _masterLibrary.addAll(cloudSongs);
+      }
+
+      // 2. Atualiza Playlists
+      final cloudSetlists = await SupabaseService.fetchAllSetlists();
+      if (cloudSetlists.isNotEmpty) {
+        final currentId = _currentSetlist?.id;
+        _allSetlists.clear();
+        _allSetlists.addAll(cloudSetlists);
+
+        if (currentId != null) {
+          final matched = _allSetlists.firstWhere(
+            (s) => s.id == currentId,
+            orElse: () => _allSetlists.first,
+          );
+          _currentSetlist = matched;
+          if (_currentSongIndex >= _currentSetlist!.songs.length) {
+            _currentSongIndex = (_currentSetlist!.songs.length - 1).clamp(0, 999);
+          }
+        } else {
+          _currentSetlist = _allSetlists.first;
+        }
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Silently sync error: $e');
+    } finally {
+      _isSyncingCloud = false;
+    }
+  }
+
+  // ==========================================
+  // GESTÃO DO ACERVO GERAL
+  // ==========================================
+
   void setLibrary(List<Song> songs) {
     _masterLibrary.clear();
     _masterLibrary.addAll(songs);
@@ -74,7 +178,7 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
-  void removeSongFromLibrary(String songId) {
+  Future<void> removeSongFromLibrary(String songId) async {
     _masterLibrary.removeWhere((s) => s.id == songId);
     for (final setlist in _allSetlists) {
       setlist.songs.removeWhere((s) => s.id == songId);
@@ -83,9 +187,13 @@ class AudioEngine extends ChangeNotifier {
       _currentSongIndex = (_currentSetlist!.songs.length - 1).clamp(0, 999);
     }
     notifyListeners();
+    await SupabaseService.deleteSongFromLibrary(songId);
   }
 
+  // ==========================================
   // GESTÃO DE MÚLTIPLAS PLAYLISTS
+  // ==========================================
+
   void setAllSetlists(List<Setlist> list, {String? selectId}) {
     if (list.isEmpty) {
       if (_allSetlists.isEmpty) {
@@ -123,6 +231,8 @@ class AudioEngine extends ChangeNotifier {
     _pitchOffset = found.songs.isNotEmpty ? found.songs[0].pitchOffsetSemitones : 0;
     _isPlaying = false;
     _playbackTicker?.cancel();
+    _driftCheckTimer?.cancel();
+    _disposeStemPlayers();
     notifyListeners();
   }
 
@@ -140,6 +250,9 @@ class AudioEngine extends ChangeNotifier {
     _currentSongIndex = 0;
     _pitchOffset = 0;
     notifyListeners();
+
+    // Sincroniza imediatamente na nuvem
+    SupabaseService.saveSetlistToCloud(newSetlist);
     return newSetlist;
   }
 
@@ -154,6 +267,8 @@ class AudioEngine extends ChangeNotifier {
       _currentSetlist!.title = cleanTitle;
     }
     notifyListeners();
+
+    SupabaseService.updateSetlistTitleOnCloud(id, cleanTitle);
   }
 
   void deleteSetlist(String id) {
@@ -166,6 +281,8 @@ class AudioEngine extends ChangeNotifier {
       _pitchOffset = _currentSetlist!.songs.isNotEmpty ? _currentSetlist!.songs[0].pitchOffsetSemitones : 0;
     }
     notifyListeners();
+
+    SupabaseService.deleteSetlistFromCloud(id);
   }
 
   void addSongToSetlist(String setlistId, Song song) {
@@ -173,6 +290,7 @@ class AudioEngine extends ChangeNotifier {
     if (!target.songs.any((s) => s.id == song.id)) {
       target.songs.add(song);
       notifyListeners();
+      SupabaseService.saveSetlistToCloud(target);
     }
   }
 
@@ -181,6 +299,7 @@ class AudioEngine extends ChangeNotifier {
       if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
         _currentSetlist!.songs.add(song);
         notifyListeners();
+        SupabaseService.saveSetlistToCloud(_currentSetlist!);
       }
     }
   }
@@ -193,6 +312,7 @@ class AudioEngine extends ChangeNotifier {
         }
       }
       notifyListeners();
+      SupabaseService.saveSetlistToCloud(_currentSetlist!);
     }
   }
 
@@ -203,6 +323,7 @@ class AudioEngine extends ChangeNotifier {
         _currentSongIndex = (_currentSetlist!.songs.length - 1).clamp(0, 999);
       }
       notifyListeners();
+      SupabaseService.saveSetlistToCloud(_currentSetlist!);
     }
   }
 
@@ -225,6 +346,7 @@ class AudioEngine extends ChangeNotifier {
     final song = _currentSetlist!.songs.removeAt(oldIndex);
     _currentSetlist!.songs.insert(newIndex, song);
     notifyListeners();
+    SupabaseService.saveSetlistToCloud(_currentSetlist!);
   }
 
   void updateSongPitchOffset(int songIndex, int offset) {
@@ -236,13 +358,16 @@ class AudioEngine extends ChangeNotifier {
       _pitchOffset = song.pitchOffsetSemitones;
     }
     notifyListeners();
+    SupabaseService.saveSetlistToCloud(_currentSetlist!);
   }
 
   // ==========================================
-  // CONTROLES DE REPRODUÇÃO (ÁUDIO REAL COM AUDIOPLAYERS)
+  // REPRODUÇÃO MULTITRACKS COM SINCRONISMO DE ALTA PRECISÃO
   // ==========================================
 
   void _disposeStemPlayers() {
+    _driftCheckTimer?.cancel();
+    _playbackTicker?.cancel();
     for (final player in _stemPlayers.values) {
       try {
         player.stop();
@@ -250,6 +375,7 @@ class AudioEngine extends ChangeNotifier {
       } catch (_) {}
     }
     _stemPlayers.clear();
+    _masterStemId = null;
   }
 
   void togglePlay() {
@@ -272,36 +398,50 @@ class AudioEngine extends ChangeNotifier {
     try {
       WakelockPlus.enable();
 
-      // Inicializa os players reais para as pistas se ainda não estiverem ativos
+      // Se ainda não inicializamos os players para a música atual
       if (_stemPlayers.isEmpty) {
         final anySolo = song.stems.any((s) => s.isSolo);
 
-        for (final stem in song.stems) {
-          if (stem.filePath != null && stem.filePath!.isNotEmpty) {
-            final player = AudioPlayer();
-            _stemPlayers[stem.id] = player;
+        // Identifica a faixa master (Click, Guia ou a primeira disponível)
+        final masterStem = song.stems.firstWhere(
+          (s) => s.name.toUpperCase().contains('CLICK') || s.name.toUpperCase().contains('GUIA'),
+          orElse: () => song.stems.first,
+        );
+        _masterStemId = masterStem.id;
 
+        // Prepara todas as faixas em paralelo
+        final initFutures = song.stems.map((stem) async {
+          if (stem.filePath == null || stem.filePath!.isEmpty) return;
+
+          final player = AudioPlayer();
+          _stemPlayers[stem.id] = player;
+
+          Source source;
+          final localPath = await AudioCacheService.getLocalPathIfExists(stem.filePath!);
+          if (localPath != null && !kIsWeb) {
+            source = DeviceFileSource(localPath);
+          } else {
             final url = SupabaseService.getAudioUrl(stem.filePath!);
+            source = UrlSource(url);
+          }
 
-            await player.setSource(UrlSource(url));
-            await player.setReleaseMode(ReleaseMode.stop);
+          await player.setPlayerMode(PlayerMode.mediaPlayer);
+          await player.setReleaseMode(ReleaseMode.stop);
+          await player.setSource(source);
 
-            // Volume efetivo
-            final effVol = stem.getEffectiveVolume(anySolo);
-            await player.setVolume(effVol);
+          // Configura volume inicial
+          final effVol = stem.getEffectiveVolume(anySolo);
+          await player.setVolume(effVol);
 
-            // Roteamento de Cabo Y no mobile (L: Click/Guia | R: Banda)
-            if (!kIsWeb) {
-              try {
-                double pan = 0.0;
-                if (_isSplitModeActive) {
-                  pan = stem.isCue ? -1.0 : 1.0;
-                }
-                await player.setBalance(pan);
-              } catch (_) {}
-            }
+          // Roteamento de PAN individual por faixa
+          if (!kIsWeb) {
+            try {
+              await player.setBalance(stem.pan);
+            } catch (_) {}
+          }
 
-            // Duração da faixa
+          // Apenas o player master monitora duração e posição para evitar conflitos na UI
+          if (stem.id == _masterStemId) {
             player.onDurationChanged.listen((dur) {
               if (dur.inMilliseconds > 0) {
                 _totalDurationSeconds = dur.inMilliseconds / 1000.0;
@@ -309,7 +449,6 @@ class AudioEngine extends ChangeNotifier {
               }
             });
 
-            // Sincronização contínua de posição, tempo e compassos
             player.onPositionChanged.listen((pos) {
               _currentPositionSeconds = pos.inMilliseconds / 1000.0;
               final bpm = song.bpm;
@@ -324,23 +463,32 @@ class AudioEngine extends ChangeNotifier {
               stop();
             });
           }
-        }
+        }).toList();
+
+        await Future.wait(initFutures);
+
+        // Dispara o download em cache silencioso em segundo plano para futuras execuções
+        AudioCacheService.prefetchSong(song);
       }
 
       if (_stemPlayers.isEmpty) {
-        // Fallback simulador se a música for demo sem pistas
+        // Fallback simulador caso seja uma música de teste sem pistas reais
         _startTicker();
       } else {
+        // Garante que todas as pistas comecem exatamente na mesma posição
         final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
-        for (final player in _stemPlayers.values) {
-          if (_currentPositionSeconds > 0) {
-            await player.seek(seekPos);
-          }
-          await player.resume();
+        if (_currentPositionSeconds > 0) {
+          await Future.wait(_stemPlayers.values.map((p) => p.seek(seekPos)));
         }
+
+        // DISPARO SIMULTÂNEO VIA FUTURE.WAIT (Zero latência de descompasso)
+        await Future.wait(_stemPlayers.values.map((p) => p.resume()));
+
+        // Inicia o Watchdog de alinhamento de drift contínuo
+        _startDriftCompensation();
       }
     } catch (e) {
-      debugPrint('Erro ao iniciar áudio: $e');
+      debugPrint('Erro ao iniciar multitracks: $e');
       _startTicker();
     } finally {
       _isLoadingAudio = false;
@@ -348,25 +496,48 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  /// Watchdog de drift: verifica a cada 600ms se alguma pista saiu do compasso e realinha
+  void _startDriftCompensation() {
+    _driftCheckTimer?.cancel();
+    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 600), (_) async {
+      if (!_isPlaying || _stemPlayers.isEmpty) return;
+
+      for (final entry in _stemPlayers.entries) {
+        if (entry.key == _masterStemId) continue;
+        final player = entry.value;
+
+        try {
+          final pos = await player.getCurrentPosition();
+          if (pos != null) {
+            final trackSec = pos.inMilliseconds / 1000.0;
+            final diff = (trackSec - _currentPositionSeconds).abs();
+            // Se houver mais de 50ms de defasagem, realinha imediatamente
+            if (diff > 0.050) {
+              player.seek(Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()));
+            }
+          }
+        } catch (_) {}
+      }
+    });
+  }
+
   Future<void> _pausePlayback() async {
     _isPlaying = false;
+    _driftCheckTimer?.cancel();
     _playbackTicker?.cancel();
     WakelockPlus.disable();
 
-    for (final player in _stemPlayers.values) {
-      try {
-        await player.pause();
-      } catch (_) {}
-    }
+    await Future.wait(_stemPlayers.values.map((p) => p.pause()));
     notifyListeners();
   }
 
   void stop() {
     _isPlaying = false;
+    _driftCheckTimer?.cancel();
+    _playbackTicker?.cancel();
     _currentPositionSeconds = 0.0;
     _currentBar = 1;
     _currentBeat = 1;
-    _playbackTicker?.cancel();
     WakelockPlus.disable();
 
     for (final player in _stemPlayers.values) {
@@ -405,12 +576,19 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  // ==========================================
+  // CONTROLE DE PITCH (TRANSPOSIÇÃO DE TOM)
+  // ==========================================
+
   void setPitchOffset(int semitones) {
     _pitchOffset = semitones.clamp(-6, 6);
     final song = currentSong;
     if (song != null) {
       song.pitchOffsetSemitones = _pitchOffset;
       song.currentKey = PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
+      if (_currentSetlist != null) {
+        SupabaseService.saveSetlistToCloud(_currentSetlist!);
+      }
     }
     notifyListeners();
   }
@@ -431,6 +609,10 @@ class AudioEngine extends ChangeNotifier {
     setPitchOffset(0);
   }
 
+  // ==========================================
+  // CONTROLE DE VOLUME, MUTE, SOLO E PAN
+  // ==========================================
+
   void setStemVolume(String stemId, double volume) {
     final song = currentSong;
     if (song == null) return;
@@ -440,6 +622,65 @@ class AudioEngine extends ChangeNotifier {
     final effVol = stem.getEffectiveVolume(anySolo);
     _stemPlayers[stemId]?.setVolume(effVol);
     notifyListeners();
+  }
+
+  /// CONTROLE DE PAN INDIVIDUAL (-1.0 = L | 0.0 = Centro | 1.0 = R)
+  void setStemPan(String stemId, double pan) {
+    final song = currentSong;
+    if (song == null) return;
+    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
+    stem.setPan(pan);
+
+    if (!kIsWeb) {
+      try {
+        _stemPlayers[stemId]?.setBalance(stem.pan);
+      } catch (e) {
+        debugPrint('Erro ao ajustar pan da faixa: $e');
+      }
+    }
+    notifyListeners();
+  }
+
+  /// PRESET CABO Y (PALCO): Click e Guia em L (-1.0) | Demais faixas da banda em R (+1.0)
+  void applySplitModeRouting() {
+    _isSplitModeActive = true;
+    final song = currentSong;
+    if (song == null) return;
+
+    for (final stem in song.stems) {
+      stem.setPan(stem.isCue ? -1.0 : 1.0);
+      if (!kIsWeb) {
+        try {
+          _stemPlayers[stem.id]?.setBalance(stem.pan);
+        } catch (_) {}
+      }
+    }
+    notifyListeners();
+  }
+
+  /// PRESET ESTÉREO (ENSAIO/FONE): Todas as faixas no Centro (0.0)
+  void applyStereoCenterRouting() {
+    _isSplitModeActive = false;
+    final song = currentSong;
+    if (song == null) return;
+
+    for (final stem in song.stems) {
+      stem.setPan(0.0);
+      if (!kIsWeb) {
+        try {
+          _stemPlayers[stem.id]?.setBalance(0.0);
+        } catch (_) {}
+      }
+    }
+    notifyListeners();
+  }
+
+  void toggleSplitMode() {
+    if (_isSplitModeActive) {
+      applyStereoCenterRouting();
+    } else {
+      applySplitModeRouting();
+    }
   }
 
   void toggleMute(String stemId) {
@@ -462,23 +703,6 @@ class AudioEngine extends ChangeNotifier {
     for (final st in song.stems) {
       final effVol = st.getEffectiveVolume(anySolo);
       _stemPlayers[st.id]?.setVolume(effVol);
-    }
-    notifyListeners();
-  }
-
-  void toggleSplitMode() {
-    _isSplitModeActive = !_isSplitModeActive;
-    final song = currentSong;
-    if (song != null && !kIsWeb) {
-      for (final stem in song.stems) {
-        try {
-          double pan = 0.0;
-          if (_isSplitModeActive) {
-            pan = stem.isCue ? -1.0 : 1.0;
-          }
-          _stemPlayers[stem.id]?.setBalance(pan);
-        } catch (_) {}
-      }
     }
     notifyListeners();
   }
@@ -515,7 +739,6 @@ class AudioEngine extends ChangeNotifier {
     });
   }
 
-  // Inicializa o sistema 100% limpo sem dados mockados
   void _initializeCleanState() {
     _disposeStemPlayers();
     _masterLibrary.clear();
@@ -534,6 +757,9 @@ class AudioEngine extends ChangeNotifier {
 
   @override
   void dispose() {
+    _realtimeChannel?.unsubscribe();
+    _cloudSyncTimer?.cancel();
+    _driftCheckTimer?.cancel();
     _disposeStemPlayers();
     _playbackTicker?.cancel();
     WakelockPlus.disable();
