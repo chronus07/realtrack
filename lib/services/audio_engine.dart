@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../models/setlist.dart';
@@ -16,6 +17,11 @@ class AudioEngine extends ChangeNotifier {
   Setlist? _currentSetlist;
   int _currentSongIndex = 0;
   
+  // PLAYERS DE ÁUDIO REAL PARA AS PISTAS
+  final Map<String, AudioPlayer> _stemPlayers = {};
+  bool _isLoadingAudio = false;
+  bool get isLoadingAudio => _isLoadingAudio;
+
   bool _isPlaying = false;
   bool _isSplitModeActive = true; // True = Modo Show (L: Click/Guia | R: P.A.)
   int _pitchOffset = 0;           // -6 a +6 semitons
@@ -232,16 +238,125 @@ class AudioEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Controles de Reprodução
+  // ==========================================
+  // CONTROLES DE REPRODUÇÃO (ÁUDIO REAL COM AUDIOPLAYERS)
+  // ==========================================
+
+  void _disposeStemPlayers() {
+    for (final player in _stemPlayers.values) {
+      try {
+        player.stop();
+        player.dispose();
+      } catch (_) {}
+    }
+    _stemPlayers.clear();
+  }
+
   void togglePlay() {
     if (currentSong == null) return;
-    _isPlaying = !_isPlaying;
     if (_isPlaying) {
-      WakelockPlus.enable();
-      _startTicker();
+      _pausePlayback();
     } else {
-      WakelockPlus.disable();
-      _playbackTicker?.cancel();
+      _startPlayback();
+    }
+  }
+
+  Future<void> _startPlayback() async {
+    final song = currentSong;
+    if (song == null) return;
+
+    _isLoadingAudio = true;
+    _isPlaying = true;
+    notifyListeners();
+
+    try {
+      WakelockPlus.enable();
+
+      // Inicializa os players reais para as pistas se ainda não estiverem ativos
+      if (_stemPlayers.isEmpty) {
+        final anySolo = song.stems.any((s) => s.isSolo);
+
+        for (final stem in song.stems) {
+          if (stem.filePath != null && stem.filePath!.isNotEmpty) {
+            final player = AudioPlayer();
+            _stemPlayers[stem.id] = player;
+
+            final url = SupabaseService.getAudioUrl(stem.filePath!);
+
+            await player.setSource(UrlSource(url));
+            await player.setReleaseMode(ReleaseMode.stop);
+
+            // Volume efetivo
+            final effVol = stem.getEffectiveVolume(anySolo);
+            await player.setVolume(effVol);
+
+            // Roteamento de Cabo Y no mobile (L: Click/Guia | R: Banda)
+            if (!kIsWeb) {
+              try {
+                double pan = 0.0;
+                if (_isSplitModeActive) {
+                  pan = stem.isCue ? -1.0 : 1.0;
+                }
+                await player.setBalance(pan);
+              } catch (_) {}
+            }
+
+            // Duração da faixa
+            player.onDurationChanged.listen((dur) {
+              if (dur.inMilliseconds > 0) {
+                _totalDurationSeconds = dur.inMilliseconds / 1000.0;
+                notifyListeners();
+              }
+            });
+
+            // Sincronização contínua de posição, tempo e compassos
+            player.onPositionChanged.listen((pos) {
+              _currentPositionSeconds = pos.inMilliseconds / 1000.0;
+              final bpm = song.bpm;
+              final beatsPerSecond = bpm / 60.0;
+              final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
+              _currentBar = (totalBeats / 4).toInt() + 1;
+              _currentBeat = (totalBeats % 4) + 1;
+              notifyListeners();
+            });
+
+            player.onPlayerComplete.listen((_) {
+              stop();
+            });
+          }
+        }
+      }
+
+      if (_stemPlayers.isEmpty) {
+        // Fallback simulador se a música for demo sem pistas
+        _startTicker();
+      } else {
+        final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
+        for (final player in _stemPlayers.values) {
+          if (_currentPositionSeconds > 0) {
+            await player.seek(seekPos);
+          }
+          await player.resume();
+        }
+      }
+    } catch (e) {
+      debugPrint('Erro ao iniciar áudio: $e');
+      _startTicker();
+    } finally {
+      _isLoadingAudio = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _pausePlayback() async {
+    _isPlaying = false;
+    _playbackTicker?.cancel();
+    WakelockPlus.disable();
+
+    for (final player in _stemPlayers.values) {
+      try {
+        await player.pause();
+      } catch (_) {}
     }
     notifyListeners();
   }
@@ -253,11 +368,18 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = 1;
     _playbackTicker?.cancel();
     WakelockPlus.disable();
+
+    for (final player in _stemPlayers.values) {
+      try {
+        player.stop();
+      } catch (_) {}
+    }
     notifyListeners();
   }
 
   void nextSong() {
     if (_currentSetlist != null && _currentSongIndex < _currentSetlist!.songs.length - 1) {
+      _disposeStemPlayers();
       _currentSongIndex++;
       _pitchOffset = 0;
       stop();
@@ -266,6 +388,7 @@ class AudioEngine extends ChangeNotifier {
 
   void previousSong() {
     if (_currentSongIndex > 0) {
+      _disposeStemPlayers();
       _currentSongIndex--;
       _pitchOffset = 0;
       stop();
@@ -274,6 +397,7 @@ class AudioEngine extends ChangeNotifier {
 
   void selectSong(int index) {
     if (_currentSetlist != null && index >= 0 && index < _currentSetlist!.songs.length) {
+      _disposeStemPlayers();
       _currentSongIndex = index;
       final song = _currentSetlist!.songs[index];
       _pitchOffset = song.pitchOffsetSemitones;
@@ -310,34 +434,63 @@ class AudioEngine extends ChangeNotifier {
   void setStemVolume(String stemId, double volume) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId);
+    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.volume = volume.clamp(0.0, 1.0);
+    final anySolo = song.stems.any((s) => s.isSolo);
+    final effVol = stem.getEffectiveVolume(anySolo);
+    _stemPlayers[stemId]?.setVolume(effVol);
     notifyListeners();
   }
 
   void toggleMute(String stemId) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId);
+    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.isMuted = !stem.isMuted;
+    final anySolo = song.stems.any((s) => s.isSolo);
+    final effVol = stem.getEffectiveVolume(anySolo);
+    _stemPlayers[stemId]?.setVolume(effVol);
     notifyListeners();
   }
 
   void toggleSolo(String stemId) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId);
+    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.isSolo = !stem.isSolo;
+    final anySolo = song.stems.any((s) => s.isSolo);
+    for (final st in song.stems) {
+      final effVol = st.getEffectiveVolume(anySolo);
+      _stemPlayers[st.id]?.setVolume(effVol);
+    }
     notifyListeners();
   }
 
   void toggleSplitMode() {
     _isSplitModeActive = !_isSplitModeActive;
+    final song = currentSong;
+    if (song != null && !kIsWeb) {
+      for (final stem in song.stems) {
+        try {
+          double pan = 0.0;
+          if (_isSplitModeActive) {
+            pan = stem.isCue ? -1.0 : 1.0;
+          }
+          _stemPlayers[stem.id]?.setBalance(pan);
+        } catch (_) {}
+      }
+    }
     notifyListeners();
   }
 
   void seekTo(double seconds) {
     _currentPositionSeconds = seconds.clamp(0.0, _totalDurationSeconds);
+    final target = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
+    for (final player in _stemPlayers.values) {
+      try {
+        player.seek(target);
+      } catch (_) {}
+    }
     notifyListeners();
   }
 
@@ -364,6 +517,7 @@ class AudioEngine extends ChangeNotifier {
 
   // Inicializa o sistema 100% limpo sem dados mockados
   void _initializeCleanState() {
+    _disposeStemPlayers();
     _masterLibrary.clear();
     final defaultSetlist = Setlist(
       id: '00000000-0000-0000-0000-000000000001',
@@ -380,6 +534,7 @@ class AudioEngine extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposeStemPlayers();
     _playbackTicker?.cancel();
     WakelockPlus.disable();
     super.dispose();

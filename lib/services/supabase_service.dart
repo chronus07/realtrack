@@ -212,6 +212,14 @@ class SupabaseService {
     return file;
   }
 
+  /// Retorna a URL pública de streaming de uma pista de áudio
+  static String getAudioUrl(String storagePath) {
+    if (storagePath.startsWith('http://') || storagePath.startsWith('https://')) {
+      return storagePath;
+    }
+    return client.storage.from(AppConfig.audioBucketName).getPublicUrl(storagePath);
+  }
+
   static bool isValidUuid(String id) {
     final regex = RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
     return regex.hasMatch(id);

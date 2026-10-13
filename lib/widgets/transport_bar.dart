@@ -108,11 +108,16 @@ class TransportBar extends StatelessWidget {
                       ),
                     ],
                   ),
-                  child: Icon(
-                    isPlaying ? Icons.pause : Icons.play_arrow,
-                    size: 32,
-                    color: Colors.black,
-                  ),
+                  child: engine.isLoadingAudio
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: CircularProgressIndicator(strokeWidth: 3, color: Colors.black),
+                        )
+                      : Icon(
+                          isPlaying ? Icons.pause : Icons.play_arrow,
+                          size: 32,
+                          color: Colors.black,
+                        ),
                 ),
               ),
               IconButton(
