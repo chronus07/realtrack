@@ -111,6 +111,7 @@ class _UploadScreenState extends State<UploadScreen> {
     try {
       final engine = context.read<AudioEngine>();
       Song? createdSong;
+      String? cloudError;
 
       // 1. Tenta fazer o upload real para o Supabase Storage + Database
       try {
@@ -131,7 +132,8 @@ class _UploadScreenState extends State<UploadScreen> {
           },
         );
       } catch (e) {
-        debugPrint('Upload no Supabase falhou, salvando no repositório local: $e');
+        cloudError = e.toString();
+        debugPrint('Upload no Supabase falhou: $e');
       }
 
       // 2. Se o Supabase ainda estiver sem credenciais ou offline, cria a música localmente
@@ -166,12 +168,23 @@ class _UploadScreenState extends State<UploadScreen> {
       });
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Música "$title" salva no Acervo Geral com sucesso!'),
-            backgroundColor: AppTheme.emeraldSafe,
-          ),
-        );
+        if (cloudError == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Música "$title" salva na nuvem com sucesso! Disponível para todos.'),
+              backgroundColor: AppTheme.emeraldSafe,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('⚠️ Salva apenas localmente neste celular. Erro na nuvem: $cloudError'),
+              backgroundColor: AppTheme.amberCue,
+              duration: const Duration(seconds: 6),
+            ),
+          );
+        }
       }
 
       // Limpa os campos

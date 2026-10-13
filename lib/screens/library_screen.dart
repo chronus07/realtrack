@@ -29,9 +29,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     try {
       final cloudSongs = await SupabaseService.fetchAllLibrarySongs();
       final engine = context.read<AudioEngine>();
-      for (var song in cloudSongs) {
-        engine.addSongToLibrary(song);
-      }
+      // Sincroniza o acervo com as músicas oficiais do Supabase
+      engine.setLibrary(cloudSongs);
     } catch (e) {
       debugPrint('Erro ao sincronizar acervo com a nuvem: $e');
     } finally {

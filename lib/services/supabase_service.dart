@@ -118,7 +118,8 @@ class SupabaseService {
         
         onProgress?.call(stepProgress, 'Enviando faixa ${i + 1}/${stemsToUpload.length}: ${item.name}...');
 
-        final String storagePath = 'songs/$songId/${file.name}';
+        final safeFileName = file.name.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+        final String storagePath = 'songs/$songId/$safeFileName';
 
         if (file.bytes != null) {
           await client.storage.from(AppConfig.audioBucketName).uploadBinary(

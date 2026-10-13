@@ -52,6 +52,12 @@ class AudioEngine extends ChangeNotifier {
   }
 
   // GESTÃO DO ACERVO & PLAYLISTS
+  void setLibrary(List<Song> songs) {
+    _masterLibrary.clear();
+    _masterLibrary.addAll(songs);
+    notifyListeners();
+  }
+
   void addSongToLibrary(Song song) {
     if (!_masterLibrary.any((s) => s.id == song.id)) {
       _masterLibrary.add(song);

@@ -1,6 +1,7 @@
 -- ==============================================================
--- REALTRACKS - SUPABASE DATABASE SCHEMA (100% GRATUITO)
--- Execute este script no SQL Editor do seu projeto Supabase
+-- REALTRACKS - SUPABASE COMPLETO & 100% GRATUITO
+-- Execute este script no SQL Editor do seu projeto Supabase:
+-- https://supabase.com/dashboard/project/mkafhbwuzbvbusdavwdo/sql
 -- ==============================================================
 
 -- 1. Tabela de Bandas / Grupos de Louvor
@@ -10,7 +11,6 @@ CREATE TABLE IF NOT EXISTS public.bands (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Inserir uma banda padrão para uso imediato
 INSERT INTO public.bands (id, name)
 VALUES ('00000000-0000-0000-0000-000000000000', 'Minha Banda')
 ON CONFLICT (id) DO NOTHING;
@@ -71,8 +71,8 @@ CREATE TABLE IF NOT EXISTS public.setlist_songs (
 );
 
 -- ==============================================================
--- POLÍTICAS DE ACESSO (RLS PERMISSIVO PARA O APP DA BANDA)
--- Permite leitura e gravação imediatas pela chave pública do app
+-- POLÍTICAS DE ACESSO (RLS PERMISSIVO TOTAL PARA O APP DA BANDA)
+-- Permite leitura e gravação imediatas pela chave anônima da banda
 -- ==============================================================
 ALTER TABLE public.bands ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.songs ENABLE ROW LEVEL SECURITY;
@@ -80,30 +80,45 @@ ALTER TABLE public.song_stems ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.setlists ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.setlist_songs ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Permitir leitura de bandas" ON public.bands FOR SELECT USING (true);
-CREATE POLICY "Permitir insercao de bandas" ON public.bands FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "Acesso publico bandas" ON public.bands;
+CREATE POLICY "Acesso publico bandas" ON public.bands FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Permitir leitura do acervo de musicas" ON public.songs FOR SELECT USING (true);
-CREATE POLICY "Permitir insercao no acervo de musicas" ON public.songs FOR INSERT WITH CHECK (true);
-CREATE POLICY "Permitir exclusao no acervo de musicas" ON public.songs FOR DELETE USING (true);
+DROP POLICY IF EXISTS "Acesso publico musicas" ON public.songs;
+CREATE POLICY "Acesso publico musicas" ON public.songs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Permitir leitura de pistas" ON public.song_stems FOR SELECT USING (true);
-CREATE POLICY "Permitir insercao de pistas" ON public.song_stems FOR INSERT WITH CHECK (true);
-CREATE POLICY "Permitir exclusao de pistas" ON public.song_stems FOR DELETE USING (true);
+DROP POLICY IF EXISTS "Acesso publico pistas" ON public.song_stems;
+CREATE POLICY "Acesso publico pistas" ON public.song_stems FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Permitir leitura de playlists" ON public.setlists FOR SELECT USING (true);
-CREATE POLICY "Permitir insercao de playlists" ON public.setlists FOR INSERT WITH CHECK (true);
-CREATE POLICY "Permitir exclusao de playlists" ON public.setlists FOR DELETE USING (true);
+DROP POLICY IF EXISTS "Acesso publico playlists" ON public.setlists;
+CREATE POLICY "Acesso publico playlists" ON public.setlists FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
-CREATE POLICY "Permitir leitura de musicas na playlist" ON public.setlist_songs FOR SELECT USING (true);
-CREATE POLICY "Permitir insercao de musicas na playlist" ON public.setlist_songs FOR INSERT WITH CHECK (true);
-CREATE POLICY "Permitir exclusao de musicas na playlist" ON public.setlist_songs FOR DELETE USING (true);
+DROP POLICY IF EXISTS "Acesso publico itens playlist" ON public.setlist_songs;
+CREATE POLICY "Acesso publico itens playlist" ON public.setlist_songs FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 
--- Bucket de Armazenamento para os Áudios
-INSERT INTO storage.buckets (id, name, public) 
-VALUES ('audio-tracks', 'audio-tracks', true)
-ON CONFLICT (id) DO NOTHING;
+-- ==============================================================
+-- BUCKET DE ARMAZENAMENTO PARA OS ÁUDIOS (audio-tracks)
+-- ==============================================================
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types) 
+VALUES ('audio-tracks', 'audio-tracks', true, 104857600, null)
+ON CONFLICT (id) DO UPDATE SET public = true;
 
--- Políticas de Storage para o Bucket audio-tracks
-CREATE POLICY "Permitir upload de audios" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'audio-tracks');
-CREATE POLICY "Permitir leitura de audios" ON storage.objects FOR SELECT USING (bucket_id = 'audio-tracks');
+DROP POLICY IF EXISTS "Permitir upload de audios" ON storage.objects;
+DROP POLICY IF EXISTS "Permitir leitura de audios" ON storage.objects;
+DROP POLICY IF EXISTS "Permitir update de audios" ON storage.objects;
+DROP POLICY IF EXISTS "Permitir exclusao de audios" ON storage.objects;
+
+CREATE POLICY "Permitir upload de audios" ON storage.objects 
+FOR INSERT TO anon, authenticated 
+WITH CHECK (bucket_id = 'audio-tracks');
+
+CREATE POLICY "Permitir leitura de audios" ON storage.objects 
+FOR SELECT TO anon, authenticated 
+USING (bucket_id = 'audio-tracks');
+
+CREATE POLICY "Permitir update de audios" ON storage.objects 
+FOR UPDATE TO anon, authenticated 
+USING (bucket_id = 'audio-tracks');
+
+CREATE POLICY "Permitir exclusao de audios" ON storage.objects 
+FOR DELETE TO anon, authenticated 
+USING (bucket_id = 'audio-tracks');
