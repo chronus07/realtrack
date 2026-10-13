@@ -121,8 +121,8 @@ jobs:
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Build Flutter Web PWA
-        run: flutter build web --release --base-href /realtrack/
+      - name: Build Flutter Web (Always fresh on F5, no caching)
+        run: flutter build web --release --base-href /realtrack/ --pwa-strategy=none
 
       - name: Copy Extra Web Files
         run: cp web/simulator.html build/web/simulator.html || true

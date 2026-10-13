@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/audio_engine.dart';
@@ -62,6 +63,9 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   }
 
   Future<void> _checkAppUpdates() async {
+    // Na Web, o usuário simplesmente recarrega com F5. O aviso de download de APK só é exibido no app Android instalado.
+    if (kIsWeb) return;
+
     final updateInfo = await UpdateService.checkForUpdate();
     if (updateInfo != null && updateInfo.hasUpdate && mounted) {
       UpdateService.showUpdateDialog(context, updateInfo);

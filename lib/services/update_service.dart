@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
@@ -27,6 +28,9 @@ class UpdateService {
 
   /// Verifica se há uma versão mais recente
   static Future<AppUpdateInfo?> checkForUpdate() async {
+    // Na Web, o usuário atualiza a página simplesmente dando F5. Desabilita verificação e download de APK.
+    if (kIsWeb) return null;
+
     try {
       // 1. Tenta buscar da tabela app_config no Supabase
       if (AppConfig.isConfigured) {
@@ -100,6 +104,8 @@ class UpdateService {
 
   /// Exibe o diálogo de atualização para o usuário
   static void showUpdateDialog(BuildContext context, AppUpdateInfo info) {
+    if (kIsWeb) return;
+
     showDialog(
       context: context,
       barrierDismissible: false,
