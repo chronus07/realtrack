@@ -35,6 +35,7 @@ class AudioEngine extends ChangeNotifier {
   int _currentBar = 1;
   int _currentBeat = 1;
   int _lastNotifiedMillis = 0;
+  int _lastPositionUpdateMillis = 0;
 
   Timer? _playbackTicker;
   Timer? _driftCheckTimer;
@@ -45,9 +46,35 @@ class AudioEngine extends ChangeNotifier {
   final Map<String, int> _lastStemSeekTimes = {};
 
   AudioEngine() {
+    _initAudioGlobal();
     _initializeCleanState();
     startCloudAutoSync();
     syncFromCloudSilently();
+  }
+
+  void _initAudioGlobal() {
+    try {
+      AudioPlayer.global.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.media,
+            audioFocus: AndroidAudioFocus.none,
+          ),
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: const [
+              AVAudioSessionOptions.mixWithOthers,
+              AVAudioSessionOptions.defaultToSpeaker,
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('AudioEngine global audio context error: $e');
+    }
   }
 
   // Getters
@@ -68,6 +95,8 @@ class AudioEngine extends ChangeNotifier {
   int get currentBar => _currentBar;
   int get currentBeat => _currentBeat;
   bool get isSyncingCloud => _isSyncingCloud;
+  bool get hasActiveSolo => currentSong?.stems.any((s) => s.isSolo) ?? false;
+  bool get hasActiveMute => currentSong?.stems.any((s) => s.isMuted) ?? false;
 
   String get currentKey {
     final song = currentSong;
@@ -403,12 +432,16 @@ class AudioEngine extends ChangeNotifier {
 
       // 1. Inicializa os players se ainda não existirem
       if (_stemPlayers.isEmpty) {
-        final anySolo = song.stems.any((s) => s.isSolo);
-
-        // Identifica faixa master (preferência por Click ou Guia)
+        // Identifica pista master (preferência: CLICK com arquivo, senão GUIA com arquivo, senão primeira com arquivo)
         final masterStem = song.stems.firstWhere(
-          (s) => s.name.toUpperCase().contains('CLICK') || s.name.toUpperCase().contains('GUIA'),
-          orElse: () => song.stems.first,
+          (s) => s.name.toUpperCase().contains('CLICK') && (s.filePath?.isNotEmpty ?? false),
+          orElse: () => song.stems.firstWhere(
+            (s) => s.name.toUpperCase().contains('GUIA') && (s.filePath?.isNotEmpty ?? false),
+            orElse: () => song.stems.firstWhere(
+              (s) => s.filePath?.isNotEmpty ?? false,
+              orElse: () => song.stems.first,
+            ),
+          ),
         );
         _masterStemId = masterStem.id;
 
@@ -421,6 +454,28 @@ class AudioEngine extends ChangeNotifier {
           initTasks.add(() async {
             try {
               final player = AudioPlayer();
+
+              // Configura contexto sem roubo de foco de áudio por pista (fundamental no Android)
+              try {
+                await player.setAudioContext(
+                  AudioContext(
+                    android: const AudioContextAndroid(
+                      isSpeakerphoneOn: true,
+                      stayAwake: true,
+                      contentType: AndroidContentType.music,
+                      usageType: AndroidUsageType.media,
+                      audioFocus: AndroidAudioFocus.none,
+                    ),
+                    iOS: AudioContextIOS(
+                      category: AVAudioSessionCategory.playback,
+                      options: const [
+                        AVAudioSessionOptions.mixWithOthers,
+                        AVAudioSessionOptions.defaultToSpeaker,
+                      ],
+                    ),
+                  ),
+                );
+              } catch (_) {}
 
               try {
                 await player.setReleaseMode(ReleaseMode.stop);
@@ -435,49 +490,48 @@ class AudioEngine extends ChangeNotifier {
                 source = UrlSource(url);
               }
 
-              await player.setSource(source);
+              // Timeout de segurança para evitar travamento se uma pista demorar
+              await player.setSource(source).timeout(const Duration(seconds: 15));
 
-              final effVol = stem.getEffectiveVolume(anySolo);
+              final effVol = stem.getEffectiveVolume(hasActiveSolo);
               await player.setVolume(effVol);
 
-              if (!kIsWeb) {
-                try {
-                  await player.setBalance(stem.pan);
-                } catch (_) {}
-              }
+              try {
+                await player.setBalance(stem.pan);
+              } catch (_) {}
 
               _stemPlayers[stem.id] = player;
 
-              // Apenas o master escuta position para evitar sobrecarga de rebuilds
-              if (stem.id == _masterStemId) {
-                player.onDurationChanged.listen((dur) {
-                  if (dur.inMilliseconds > 0) {
-                    _totalDurationSeconds = dur.inMilliseconds / 1000.0;
+              // Duração da música: atualiza conforme as faixas carregam
+              player.onDurationChanged.listen((dur) {
+                if (dur.inMilliseconds > 0) {
+                  final durSec = dur.inMilliseconds / 1000.0;
+                  if (durSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
+                    _totalDurationSeconds = durSec;
                     notifyListeners();
                   }
-                });
+                }
+              });
 
+              // Apenas o master escuta position para evitar sobrecarga de rebuilds
+              if (stem.id == _masterStemId) {
                 player.onPositionChanged.listen((pos) {
                   final millis = pos.inMilliseconds;
+                  _lastPositionUpdateMillis = DateTime.now().millisecondsSinceEpoch;
                   _currentPositionSeconds = millis / 1000.0;
+                  _updateMusicalGrid();
 
-                  final bpm = song.bpm;
-                  final beatsPerSecond = bpm / 60.0;
-                  final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
-                  final bar = (totalBeats / 4).toInt() + 1;
-                  final beat = (totalBeats % 4) + 1;
-
-                  // Throttling: notifica a cada 250ms ou quando mudar o compasso/tempo
-                  if (bar != _currentBar || beat != _currentBeat || (millis - _lastNotifiedMillis).abs() >= 250) {
-                    _currentBar = bar;
-                    _currentBeat = beat;
+                  if ((millis - _lastNotifiedMillis).abs() >= 250) {
                     _lastNotifiedMillis = millis;
                     notifyListeners();
                   }
                 });
 
                 player.onPlayerComplete.listen((_) {
-                  stop();
+                  // Só encerra se a música realmente tiver chegado ao final
+                  if (_currentPositionSeconds >= (_totalDurationSeconds - 2.0)) {
+                    stop();
+                  }
                 });
               }
             } catch (stemErr) {
@@ -491,9 +545,9 @@ class AudioEngine extends ChangeNotifier {
 
       if (_stemPlayers.isEmpty) {
         // Fallback simulador se não houver áudios válidos
-        _startTicker();
+        _startPlaybackClock();
       } else {
-        // Se a posição for maior que 0, posiciona todas
+        // Se a posição for maior que 0, posiciona todas as pistas
         final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
         if (_currentPositionSeconds > 0) {
           final seekFutures = _stemPlayers.values.map((p) async {
@@ -514,6 +568,13 @@ class AudioEngine extends ChangeNotifier {
         });
         await Future.wait(resumeFutures);
 
+        // CRUCIAL: Após início no hardware do Android/iOS, reaplica volume e balanço (PAN)
+        // em todas as pistas para garantir que o roteamento L/R do Cabo Y não seja resetado pelo SO!
+        await _applyAllStemsAudioSettings();
+
+        // Inicia relógio de reprodução com watchdog de avanço
+        _startPlaybackClock();
+
         // Inicia o monitor de alinhamento suave (a cada 3.0s, sem travamentos)
         _startDriftCompensation();
 
@@ -522,11 +583,20 @@ class AudioEngine extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Erro ao iniciar áudio: $e');
-      _startTicker();
+      _startPlaybackClock();
     } finally {
       _isLoadingAudio = false;
       notifyListeners();
     }
+  }
+
+  void _updateMusicalGrid() {
+    final song = currentSong;
+    final bpm = song?.bpm ?? 120;
+    final beatsPerSecond = bpm / 60.0;
+    final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
+    _currentBar = (totalBeats / 4).toInt() + 1;
+    _currentBeat = (totalBeats % 4) + 1;
   }
 
   /// Watchdog de drift suave: a cada 3.0s verifica se alguma pista divergiu mais de 250ms
@@ -584,6 +654,7 @@ class AudioEngine extends ChangeNotifier {
     _currentPositionSeconds = 0.0;
     _currentBar = 1;
     _currentBeat = 1;
+    _lastPositionUpdateMillis = 0;
     WakelockPlus.disable();
 
     // Mantém players em estado Pausado na posição zero (evita IllegalStateException no Android)
@@ -658,17 +729,62 @@ class AudioEngine extends ChangeNotifier {
   }
 
   // ==========================================
-  // CONTROLE DE VOLUME, MUTE, SOLO E PAN
+  // CONTROLE DE VOLUME, MUTE, SOLO E PAN (UNIFICADO E PROTEGIDO)
   // ==========================================
+
+  /// Aplica volume e balanço (PAN) com proteção nativa Android/iOS
+  Future<void> _applyStemAudioSettings(StemTrack stem) async {
+    final player = _stemPlayers[stem.id];
+    if (player == null) return;
+
+    final anySolo = hasActiveSolo;
+    final effVol = stem.getEffectiveVolume(anySolo);
+
+    try {
+      // 1. Aplica o volume efetivo considerando Solo e Mute
+      await player.setVolume(effVol);
+
+      // 2. CRUCIAL NO ANDROID E IOS:
+      // O MediaPlayer do Android reseta o balanço (L/R) para (v, v) sempre que setVolume é chamado.
+      // Reaplicar setBalance imediatamente após setVolume garante que o PAN (Cabo Y ou customizado)
+      // seja rigorosamente mantido no hardware!
+      try {
+        await player.setBalance(stem.pan);
+      } catch (_) {}
+    } catch (e) {
+      debugPrint('Erro ao aplicar configurações de áudio na pista ${stem.name}: $e');
+    }
+  }
+
+  /// Aplica configurações de volume e balanço em todas as faixas ativas
+  Future<void> _applyAllStemsAudioSettings() async {
+    final song = currentSong;
+    if (song == null) return;
+
+    final anySolo = hasActiveSolo;
+
+    for (final stem in song.stems) {
+      final player = _stemPlayers[stem.id];
+      if (player == null) continue;
+
+      final effVol = stem.getEffectiveVolume(anySolo);
+      try {
+        await player.setVolume(effVol);
+        try {
+          await player.setBalance(stem.pan);
+        } catch (_) {}
+      } catch (e) {
+        debugPrint('Erro ao aplicar volume/pan em ${stem.name}: $e');
+      }
+    }
+  }
 
   void setStemVolume(String stemId, double volume) {
     final song = currentSong;
     if (song == null) return;
     final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.volume = volume.clamp(0.0, 1.0);
-    final anySolo = song.stems.any((s) => s.isSolo);
-    final effVol = stem.getEffectiveVolume(anySolo);
-    _stemPlayers[stemId]?.setVolume(effVol);
+    _applyStemAudioSettings(stem);
     notifyListeners();
   }
 
@@ -678,14 +794,7 @@ class AudioEngine extends ChangeNotifier {
     if (song == null) return;
     final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.setPan(pan);
-
-    if (!kIsWeb) {
-      try {
-        _stemPlayers[stemId]?.setBalance(stem.pan);
-      } catch (e) {
-        debugPrint('Erro ao ajustar pan da faixa: $e');
-      }
-    }
+    _applyStemAudioSettings(stem);
     notifyListeners();
   }
 
@@ -697,12 +806,8 @@ class AudioEngine extends ChangeNotifier {
 
     for (final stem in song.stems) {
       stem.setPan(stem.isCue ? -1.0 : 1.0);
-      if (!kIsWeb) {
-        try {
-          _stemPlayers[stem.id]?.setBalance(stem.pan);
-        } catch (_) {}
-      }
     }
+    _applyAllStemsAudioSettings();
     notifyListeners();
   }
 
@@ -714,12 +819,8 @@ class AudioEngine extends ChangeNotifier {
 
     for (final stem in song.stems) {
       stem.setPan(0.0);
-      if (!kIsWeb) {
-        try {
-          _stemPlayers[stem.id]?.setBalance(0.0);
-        } catch (_) {}
-      }
     }
+    _applyAllStemsAudioSettings();
     notifyListeners();
   }
 
@@ -736,9 +837,7 @@ class AudioEngine extends ChangeNotifier {
     if (song == null) return;
     final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.isMuted = !stem.isMuted;
-    final anySolo = song.stems.any((s) => s.isSolo);
-    final effVol = stem.getEffectiveVolume(anySolo);
-    _stemPlayers[stemId]?.setVolume(effVol);
+    _applyAllStemsAudioSettings();
     notifyListeners();
   }
 
@@ -747,11 +846,27 @@ class AudioEngine extends ChangeNotifier {
     if (song == null) return;
     final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
     stem.isSolo = !stem.isSolo;
-    final anySolo = song.stems.any((s) => s.isSolo);
-    for (final st in song.stems) {
-      final effVol = st.getEffectiveVolume(anySolo);
-      _stemPlayers[st.id]?.setVolume(effVol);
+    _applyAllStemsAudioSettings();
+    notifyListeners();
+  }
+
+  void clearAllSolos() {
+    final song = currentSong;
+    if (song == null) return;
+    for (final stem in song.stems) {
+      stem.isSolo = false;
     }
+    _applyAllStemsAudioSettings();
+    notifyListeners();
+  }
+
+  void clearAllMutes() {
+    final song = currentSong;
+    if (song == null) return;
+    for (final stem in song.stems) {
+      stem.isMuted = false;
+    }
+    _applyAllStemsAudioSettings();
     notifyListeners();
   }
 
@@ -766,24 +881,23 @@ class AudioEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _startTicker() {
+  /// Relógio de reprodução com watchdog de avanço para garantir sincronismo
+  void _startPlaybackClock() {
     _playbackTicker?.cancel();
     _playbackTicker = Timer.periodic(const Duration(milliseconds: 200), (timer) {
       if (!_isPlaying) return;
-      _currentPositionSeconds += 0.2;
-      if (_currentPositionSeconds >= _totalDurationSeconds) {
-        stop();
-        return;
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // Se não há players nativos ou se o player nativo não emitiu posição recente (> 1000ms)
+      if (_stemPlayers.isEmpty || (now - _lastPositionUpdateMillis > 1000)) {
+        _currentPositionSeconds += 0.2;
+        if (_currentPositionSeconds >= _totalDurationSeconds) {
+          stop();
+          return;
+        }
+        _updateMusicalGrid();
+        notifyListeners();
       }
-
-      final song = currentSong;
-      final bpm = song?.bpm ?? 120;
-      final beatsPerSecond = bpm / 60.0;
-      final totalBeats = (_currentPositionSeconds * beatsPerSecond).toInt();
-      _currentBar = (totalBeats / 4).toInt() + 1;
-      _currentBeat = (totalBeats % 4) + 1;
-
-      notifyListeners();
     });
   }
 

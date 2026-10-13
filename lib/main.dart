@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'services/audio_engine.dart';
 import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
@@ -14,6 +15,30 @@ import 'services/update_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  // Configuração global de áudio: Permite reproduzir 16+ pistas simultâneas sem conflito de foco no Android/iOS
+  try {
+    await AudioPlayer.global.setAudioContext(
+      AudioContext(
+        android: const AudioContextAndroid(
+          isSpeakerphoneOn: true,
+          stayAwake: true,
+          contentType: AndroidContentType.music,
+          usageType: AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.none,
+        ),
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+          options: const [
+            AVAudioSessionOptions.mixWithOthers,
+            AVAudioSessionOptions.defaultToSpeaker,
+          ],
+        ),
+      ),
+    );
+  } catch (e) {
+    debugPrint('Configuração global de AudioContext: $e');
+  }
+
   try {
     await SupabaseService.initialize();
   } catch (e) {

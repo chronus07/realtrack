@@ -18,23 +18,33 @@ class StemFader extends StatelessWidget {
   }) {
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        width: 24,
-        height: 22,
+        width: 32,
+        height: 26,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isSelected ? color : Colors.white.withOpacity(0.06),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(5),
           border: Border.all(
             color: isSelected ? color : Colors.white24,
-            width: 1,
+            width: isSelected ? 1.5 : 1,
           ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: color.withOpacity(0.35),
+                    blurRadius: 4,
+                    spreadRadius: 0.5,
+                  )
+                ]
+              : null,
         ),
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 10,
+            fontSize: 11,
             fontWeight: FontWeight.w900,
             color: isSelected
                 ? (color == AppTheme.amberCue ? Colors.black : Colors.white)
@@ -47,78 +57,94 @@ class StemFader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final engine = context.read<AudioEngine>();
+    final engine = context.watch<AudioEngine>();
 
     final isCue = stem.isCue;
+    final hasSolo = engine.hasActiveSolo;
+    final isSilencedBySolo = hasSolo && !stem.isSolo;
     final primaryTrackColor = isCue ? AppTheme.amberCue : AppTheme.primary;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: BoxDecoration(
-        color: AppTheme.background.withOpacity(0.55),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: stem.isSolo
-              ? AppTheme.amberCue.withOpacity(0.7)
-              : stem.isMuted
-                  ? Colors.white10
-                  : AppTheme.cardBorder,
+    return Opacity(
+      opacity: isSilencedBySolo ? 0.45 : (stem.isMuted ? 0.65 : 1.0),
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: AppTheme.background.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: stem.isSolo
+                ? AppTheme.amberCue
+                : stem.isMuted
+                    ? AppTheme.roseMute.withOpacity(0.4)
+                    : (isSilencedBySolo ? Colors.white10 : AppTheme.cardBorder),
+            width: stem.isSolo ? 1.5 : 1,
+          ),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Linha 1: Nome da Pista + Badge Tipo + Seletor de PAN [ L ] [ C ] [ R ]
-          Row(
-            children: [
-              // Indicador visual colorido
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: stem.isMuted ? Colors.white24 : primaryTrackColor,
-                  shape: BoxShape.circle,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Linha 1: Nome da Pista + Badge Tipo + Seletor de PAN [ L ] [ C ] [ R ]
+            Row(
+              children: [
+                // Indicador visual colorido
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: stem.isSolo
+                        ? AppTheme.amberCue
+                        : (stem.isMuted || isSilencedBySolo ? Colors.white24 : primaryTrackColor),
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              // Nome da Pista
-              Expanded(
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        stem.name,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: stem.isMuted
-                              ? Colors.white38
-                              : (isCue ? AppTheme.amberCue : Colors.white),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: isCue ? AppTheme.amberCue.withOpacity(0.18) : Colors.white10,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        isCue ? 'CUE' : 'BANDA',
-                        style: TextStyle(
-                          fontSize: 8,
-                          fontWeight: FontWeight.w800,
-                          color: isCue ? AppTheme.amberCue : Colors.white54,
-                          letterSpacing: 0.5,
+                const SizedBox(width: 6),
+                // Nome da Pista
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          stem.name,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: stem.isSolo
+                                ? AppTheme.amberCue
+                                : (stem.isMuted || isSilencedBySolo
+                                    ? Colors.white38
+                                    : (isCue ? AppTheme.amberCue : Colors.white)),
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: isCue ? AppTheme.amberCue.withOpacity(0.18) : Colors.white10,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isCue ? 'CUE' : 'BANDA',
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                            color: isCue ? AppTheme.amberCue : Colors.white54,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      if (isSilencedBySolo) ...[
+                        const SizedBox(width: 4),
+                        const Text(
+                          '(Solo off)',
+                          style: TextStyle(fontSize: 8, color: Colors.white30, fontStyle: FontStyle.italic),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
 
               // Controle de PAN
               Row(
@@ -202,16 +228,28 @@ class StemFader extends StatelessWidget {
                 children: [
                   GestureDetector(
                     onTap: () => engine.toggleMute(stem.id),
-                    child: Container(
-                      width: 26,
-                      height: 26,
+                    behavior: HitTestBehavior.opaque,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 32,
+                      height: 28,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: stem.isMuted ? AppTheme.roseMute : Colors.white.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(6),
                         border: Border.all(
                           color: stem.isMuted ? AppTheme.roseMute : Colors.white24,
+                          width: stem.isMuted ? 1.5 : 1,
                         ),
+                        boxShadow: stem.isMuted
+                            ? [
+                                BoxShadow(
+                                  color: AppTheme.roseMute.withOpacity(0.4),
+                                  blurRadius: 4,
+                                  spreadRadius: 0.5,
+                                )
+                              ]
+                            : null,
                       ),
                       child: Text(
                         'M',
@@ -226,16 +264,28 @@ class StemFader extends StatelessWidget {
                   const SizedBox(width: 4),
                   GestureDetector(
                     onTap: () => engine.toggleSolo(stem.id),
-                    child: Container(
-                      width: 26,
-                      height: 26,
+                    behavior: HitTestBehavior.opaque,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 32,
+                      height: 28,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
                         color: stem.isSolo ? AppTheme.amberCue : Colors.white.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(5),
+                        borderRadius: BorderRadius.circular(6),
                         border: Border.all(
                           color: stem.isSolo ? AppTheme.amberCue : Colors.white24,
+                          width: stem.isSolo ? 1.5 : 1,
                         ),
+                        boxShadow: stem.isSolo
+                            ? [
+                                BoxShadow(
+                                  color: AppTheme.amberCue.withOpacity(0.4),
+                                  blurRadius: 4,
+                                  spreadRadius: 0.5,
+                                )
+                              ]
+                            : null,
                       ),
                       child: Text(
                         'S',

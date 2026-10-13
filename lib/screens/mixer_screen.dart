@@ -100,13 +100,27 @@ class MixerScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          // Botão seletor rápido de Cabo Y (Palco) vs Estéreo (Ensaio)
+          // Botão seletor rápido de Cabo Y (Palco) vs Estéreo (Ensaio) - 1 Toque Direto
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: PopupMenuButton<String>(
-              tooltip: 'Roteamento de Canais e PAN',
-              icon: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: GestureDetector(
+              onTap: () {
+                engine.toggleSplitMode();
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      engine.isSplitModeActive
+                          ? '🎛️ Cabo Y Ativado: Click/Guia em L (-1.0) e Banda em R (+1.0)!'
+                          : '🎧 Estéreo Normal: Todas as faixas no Centro (0.0)!',
+                    ),
+                    backgroundColor: engine.isSplitModeActive ? AppTheme.emeraldSafe : Colors.blueGrey,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
                   color: engine.isSplitModeActive
                       ? AppTheme.emeraldSafe.withOpacity(0.18)
@@ -124,7 +138,7 @@ class MixerScreen extends StatelessWidget {
                       size: 14,
                       color: engine.isSplitModeActive ? AppTheme.emeraldSafe : Colors.white70,
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 5),
                     Text(
                       engine.isSplitModeActive ? 'Cabo Y (L/R)' : 'Estéreo (C)',
                       style: TextStyle(
@@ -136,49 +150,6 @@ class MixerScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              onSelected: (val) {
-                if (val == 'split') {
-                  engine.applySplitModeRouting();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('🎛️ Cabo Y ativado: Click/Guia em L e Banda em R!'),
-                      backgroundColor: AppTheme.emeraldSafe,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                } else if (val == 'stereo') {
-                  engine.applyStereoCenterRouting();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('🎧 Estéreo normal ativado: Todas as pistas centralizadas!'),
-                      backgroundColor: Colors.blueGrey,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                }
-              },
-              itemBuilder: (ctx) => [
-                const PopupMenuItem(
-                  value: 'split',
-                  child: Row(
-                    children: [
-                      Icon(Icons.headphones, color: AppTheme.emeraldSafe, size: 18),
-                      SizedBox(width: 8),
-                      Text('Cabo Y (L: Click/Guia | R: Banda)', style: TextStyle(fontSize: 12)),
-                    ],
-                  ),
-                ),
-                const PopupMenuItem(
-                  value: 'stereo',
-                  child: Row(
-                    children: [
-                      Icon(Icons.volume_up, color: Colors.white70, size: 18),
-                      SizedBox(width: 8),
-                      Text('Estéreo / Ensaio (Todas no Centro)', style: TextStyle(fontSize: 12)),
-                    ],
-                  ),
-                ),
-              ],
             ),
           ),
         ],
@@ -195,6 +166,45 @@ class MixerScreen extends StatelessWidget {
               if (song.sections.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 const SectionMarkers(),
+              ],
+
+              // Banner visual quando Modo SOLO estiver ativo
+              if (engine.hasActiveSolo) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.amberCue.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.amberCue.withOpacity(0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.headphones, size: 16, color: AppTheme.amberCue),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'SOLO ATIVO: Apenas pistas com [S] estão soando.',
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.amberCue),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: engine.clearAllSolos,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTheme.amberCue,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: const Text(
+                            'Limpar Solos',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.black),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
 
               const SizedBox(height: 6),
