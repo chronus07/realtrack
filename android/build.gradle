@@ -9,15 +9,13 @@ rootProject.buildDir = "../build"
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
-subprojects {
-    project.evaluationDependsOn(":app")
-}
 
-subprojects {
-    afterEvaluate { project ->
-        if (project.hasProperty("android")) {
-            project.android {
-                if (compileSdkVersion < 36) {
+// Aplica compileSdkVersion 36 apenas aos plugins/subprojetos (o :app já tem 36 configurado)
+subprojects { subproject ->
+    if (subproject.name != "app") {
+        subproject.afterEvaluate {
+            if (subproject.hasProperty("android")) {
+                subproject.android {
                     compileSdkVersion 36
                 }
             }
