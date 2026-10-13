@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RealTracks - Player & Acervo Geral</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    input[type=range] {
+      -webkit-appearance: none;
+      background: transparent;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 18px;
+      width: 18px;
+      border-radius: 9999px;
+      background: #38bdf8;
+      cursor: pointer;
+      margin-top: -6px;
+      box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      width: 100%;
+      height: 6px;
+      background: #334155;
+      border-radius: 9999px;
+    }
+    @keyframes pulse-beat {
+      0% { transform: scale(1); opacity: 0.4; }
+      50% { transform: scale(1.3); opacity: 1; filter: drop-shadow(0 0 6px #38bdf8); }
+      100% { transform: scale(1); opacity: 0.4; }
+    }
+    .beat-active {
+      animation: pulse-beat 0.5s infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased min-h-screen flex flex-col items-center p-2 sm:p-6 select-none font-sans">
+
+  <!-- Header & Screen Selector -->
+  <header class="w-full max-w-md mb-4 flex flex-col gap-2">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-sky-500 flex items-center justify-center font-black text-black text-lg">RT</div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white leading-tight">RealTracks</h1>
+          <p class="text-[10px] text-emerald-400 font-mono">Conectado ao Supabase Cloud ☁️</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-900 px-2.5 py-1 rounded-full border border-slate-800">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Cabo Y Pronto</span>
+      </div>
+    </div>
+
+    <!-- Navigation Pills -->
+    <div class="grid grid-cols-5 gap-1 p-1 bg-slate-900/90 rounded-xl border border-slate-800 text-[11px]">
+      <button onclick="switchScreen('setlists')" id="btn-setlists" class="tab-btn py-1.5 rounded-lg font-semibold bg-sky-500 text-black shadow-sm transition">Playlists</button>
+      <button onclick="switchScreen('library')" id="btn-library" class="tab-btn py-1.5 rounded-lg font-medium text-slate-400 hover:text-white transition">Acervo</button>
+      <button onclick="switchScreen('mixer')" id="btn-mixer" class="tab-btn py-1.5 rounded-lg font-medium text-slate-400 hover:text-white transition">Mixer</button>
+      <button onclick="switchScreen('chords')" id="btn-chords" class="tab-btn py-1.5 rounded-lg font-medium text-slate-400 hover:text-white transition">Cifras</button>
+      <button onclick="switchScreen('upload')" id="btn-upload" class="tab-btn py-1.5 rounded-lg font-medium text-slate-400 hover:text-white transition">+ Nova</button>
+    </div>
+  </header>
+
+  <!-- Mobile Frame Container -->
+  <main class="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl relative min-h-[640px] flex flex-col justify-between">
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 1: PLAYLIST DA SEMANA -->
+    <!-- ============================================================= -->
+    <section id="screen-setlists" class="screen-view p-4 flex-1 flex flex-col justify-between">
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <span class="text-[10px] font-bold text-sky-400 tracking-wider font-mono">PLAYLIST DA SEMANA</span>
+            <h2 class="text-base font-bold text-white">Culto de Domingo</h2>
+          </div>
+          <div class="flex gap-1.5">
+            <button onclick="syncWithSupabase()" title="Sincronizar com a nuvem" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-sky-400 text-xs font-bold rounded-lg border border-slate-700 flex items-center gap-1">
+              <span>🔄</span> Sincronizar
+            </button>
+            <button onclick="openAddModal()" class="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-lg shadow transition flex items-center gap-1">
+              <span>+</span> Adicionar
+            </button>
+          </div>
+        </div>
+
+        <!-- Banner Sincronia -->
+        <div class="bg-emerald-950/40 border border-emerald-500/30 rounded-xl p-2.5 mb-3 flex items-center gap-2 text-xs">
+          <div class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[10px]">✓</div>
+          <div>
+            <p id="playlist-count-label" class="font-bold text-emerald-300">0 Música(s) na Playlist</p>
+            <p class="text-[10px] text-emerald-500/80">Disponível em tempo real para todos os membros</p>
+          </div>
+        </div>
+
+        <!-- Lista de músicas da playlist -->
+        <div id="setlist-songs-container" class="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+          <!-- Renderizado via JS -->
+        </div>
+      </div>
+
+      <button id="btn-open-mixer-bar" onclick="switchScreen('mixer')" class="w-full mt-4 py-3 bg-slate-800 text-slate-500 font-bold rounded-xl shadow cursor-not-allowed transition">
+        Abrir no Player de Palco ➔
+      </button>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 2: ACERVO GERAL (REPOSITÓRIO SUPABASE) -->
+    <!-- ============================================================= -->
+    <section id="screen-library" class="screen-view p-4 flex-1 hidden flex-col justify-between">
+      <div>
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <span class="text-[10px] font-bold text-sky-400 tracking-wider font-mono">REPOSITÓRIO GERAL</span>
+            <h2 class="text-base font-bold text-white">Acervo da Banda</h2>
+          </div>
+          <button onclick="switchScreen('upload')" class="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-lg shadow transition">
+            + Cadastrar
+          </button>
+        </div>
+
+        <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-2.5 mb-3 flex items-center justify-between text-xs">
+          <span id="library-count-label" class="text-slate-400">0 Músicas salvas na nuvem</span>
+          <button onclick="syncWithSupabase()" class="text-sky-400 hover:underline text-[11px] font-semibold">Atualizar Lista</button>
+        </div>
+
+        <!-- Campo de busca -->
+        <div class="mb-3">
+          <input type="text" id="library-search-input" oninput="filterLibrary(this.value)" placeholder="Buscar no acervo por título, artista ou tom..." class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
+        </div>
+
+        <!-- Lista do acervo -->
+        <div id="library-list" class="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+          <!-- Renderizado via JS -->
+        </div>
+      </div>
+
+      <button onclick="switchScreen('upload')" class="w-full mt-4 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition">
+        + Cadastrar Nova Música no Acervo
+      </button>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 3: MIXER DE PALCO & PLAYER -->
+    <!-- ============================================================= -->
+    <section id="screen-mixer" class="screen-view p-4 flex-1 hidden flex-col justify-between">
+      <div id="mixer-empty-state" class="my-auto py-12 px-4 text-center border-2 border-dashed border-slate-800/80 rounded-2xl bg-slate-950/40">
+        <div class="w-14 h-14 mx-auto rounded-full bg-slate-800/60 flex items-center justify-center text-2xl mb-3">🎛️</div>
+        <h3 class="text-base font-bold text-slate-200">Nenhuma música carregada no mixer</h3>
+        <p class="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Adicione músicas na playlist e clique em uma para abrir os controles de volume, faders e transposição de tom.</p>
+        <button onclick="switchScreen('setlists')" class="mt-4 px-4 py-2.5 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-xl shadow transition">
+          Ir para Playlist
+        </button>
+      </div>
+
+      <div id="mixer-active-area" class="hidden flex-col justify-between flex-1">
+        <div>
+          <!-- Cabeçalho da música ativa -->
+          <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+            <div>
+              <span id="mixer-song-artist" class="text-[10px] text-sky-400 font-bold uppercase tracking-wider">Artista</span>
+              <h2 id="mixer-song-title" class="text-base font-bold text-white truncate max-w-[220px]">Título da Música</h2>
+              <p class="text-[10px] text-slate-400 font-mono">BPM: <span id="mixer-song-bpm" class="text-white">120</span> • Tom Original: <span id="mixer-song-orig-key" class="text-amber-400 font-bold">G</span></p>
+            </div>
+            <!-- Transposição de tom em tempo real -->
+            <div class="bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-center">
+              <span class="text-[9px] text-slate-400 block font-bold">TOM ATUAL</span>
+              <div class="flex items-center gap-1.5 my-0.5">
+                <button onclick="changePitch(-1)" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-xs flex items-center justify-center">-</button>
+                <span id="current-key-badge" class="text-sm font-bold text-amber-400 px-1">G</span>
+                <button onclick="changePitch(1)" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-xs flex items-center justify-center">+</button>
+              </div>
+              <span id="pitch-offset-badge" class="text-[9px] text-amber-300 font-mono font-semibold">(Original)</span>
+            </div>
+          </div>
+
+          <!-- Roteamento Cabo Y -->
+          <div class="grid grid-cols-2 gap-2 mb-3 text-[10px]">
+            <div class="bg-amber-950/30 border border-amber-500/30 rounded-lg p-2 text-center">
+              <span class="font-bold text-amber-400 block">CANAL ESQUERDO (L)</span>
+              <span class="text-slate-400">Fone Músicos: Click & Guia (Sem Pitch)</span>
+            </div>
+            <div class="bg-sky-950/30 border border-sky-500/30 rounded-lg p-2 text-center">
+              <span class="font-bold text-sky-400 block">CANAL DIREITO (R)</span>
+              <span class="text-slate-400">P.A. / Público: Banda & Pads (Com Pitch)</span>
+            </div>
+          </div>
+
+          <!-- Faders e canais de stems -->
+          <div id="mixer-tracks-container" class="space-y-3 bg-slate-950 p-3 rounded-2xl border border-slate-800">
+            <!-- Stems gerados dinamicamente -->
+          </div>
+        </div>
+
+        <!-- Barra de Transporte & Metrônomo -->
+        <div class="mt-4 pt-3 border-t border-slate-800">
+          <div class="flex items-center justify-between mb-2 text-xs">
+            <span id="time-display" class="font-mono text-slate-400">01:24 / 04:15</span>
+            <div class="flex items-center gap-1.5 font-mono">
+              <span class="text-[10px] text-slate-500">COMPASSO:</span>
+              <span id="bar-display" class="text-sky-400 font-bold">12</span>
+              <span class="text-slate-600">|</span>
+              <span id="beat-1" class="w-2.5 h-2.5 rounded-full bg-sky-500 inline-block"></span>
+              <span id="beat-2" class="w-2 h-2 rounded-full bg-slate-700 inline-block"></span>
+              <span id="beat-3" class="w-2 h-2 rounded-full bg-slate-700 inline-block"></span>
+              <span id="beat-4" class="w-2 h-2 rounded-full bg-slate-700 inline-block"></span>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <button onclick="prevSong()" class="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">⏮️</button>
+            <button onclick="togglePlay()" id="btn-play-pause" class="flex-1 py-3 bg-sky-500 hover:bg-sky-400 text-black font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-sm transition">
+              <span id="play-pause-label">⏸️ PAUSAR</span>
+            </button>
+            <button onclick="stopPlayback()" class="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">⏹️</button>
+            <button onclick="nextSong()" class="p-2.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">⏭️</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 4: CIFRAS DINÂMICAS -->
+    <!-- ============================================================= -->
+    <section id="screen-chords" class="screen-view p-4 flex-1 hidden flex-col justify-between">
+      <div id="chords-empty-state" class="my-auto py-12 px-4 text-center border-2 border-dashed border-slate-800/80 rounded-2xl bg-slate-950/40">
+        <div class="w-14 h-14 mx-auto rounded-full bg-slate-800/60 flex items-center justify-center text-2xl mb-3">📄</div>
+        <h3 class="text-base font-bold text-slate-200">Nenhuma cifra ativa</h3>
+        <p class="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Selecione uma música na playlist para visualizar e transpor a cifra em tempo real.</p>
+        <button onclick="switchScreen('setlists')" class="mt-4 px-4 py-2.5 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-xl shadow transition">
+          Ver Playlist
+        </button>
+      </div>
+
+      <div id="chords-active-area" class="hidden flex-col justify-between flex-1">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <h2 id="chord-song-title" class="text-lg font-bold text-white">Título da Música</h2>
+            <p class="text-xs text-slate-400">Cifras transpostas automaticamente</p>
+          </div>
+          <div class="flex items-center gap-1 bg-slate-800 px-2.5 py-1.5 rounded-lg text-xs font-bold border border-slate-700">
+            <button onclick="changePitch(-1)" class="w-6 h-6 rounded bg-slate-700 text-slate-200">-</button>
+            <span id="chord-key-badge" class="px-1 text-amber-400 font-bold">Tom G</span>
+            <button onclick="changePitch(1)" class="w-6 h-6 rounded bg-slate-700 text-slate-200">+</button>
+          </div>
+        </div>
+        <div id="chord-content-box" class="bg-slate-950 p-4 rounded-2xl border border-slate-800 text-xs font-mono leading-relaxed space-y-4 max-h-[420px] overflow-y-auto">
+          <!-- Cifra dinâmica -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- SCREEN 5: UPLOAD DE NOVA MÚSICA -->
+    <!-- ============================================================= -->
+    <section id="screen-upload" class="screen-view p-4 flex-1 hidden flex-col justify-between">
+      <div>
+        <h2 class="text-lg font-bold text-white mb-1">Cadastrar Nova Música</h2>
+        <p class="text-xs text-slate-400 mb-4">A música será salva no Supabase e ficará disponível para toda a banda imediatamente.</p>
+
+        <div class="space-y-3">
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Nome da Música *</label>
+            <input type="text" id="new-song-title" placeholder="Ex: Há Um Rio" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Artista / Ministério</label>
+            <input type="text" id="new-song-artist" placeholder="Ex: Fernandinho" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1">Tom Original</label>
+              <select id="new-song-key" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+                <option value="C">C (Dó)</option>
+                <option value="C#">C# / Db</option>
+                <option value="D">D (Ré)</option>
+                <option value="Eb">Eb / D#</option>
+                <option value="E">E (Mi)</option>
+                <option value="F">F (Fá)</option>
+                <option value="F#">F# / Gb</option>
+                <option value="G" selected>G (Sol)</option>
+                <option value="Ab">Ab / G#</option>
+                <option value="A">A (Lá)</option>
+                <option value="Bb">Bb / A#</option>
+                <option value="B">B (Si)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-slate-400 mb-1">BPM (Andamento)</label>
+              <input type="number" id="new-song-bpm" value="120" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-[11px] font-medium text-slate-400 mb-1">Cifra & Letra (Opcional)</label>
+            <textarea id="new-song-chords" rows="4" placeholder="Cole a cifra aqui...
+Exemplo:
+G          D           Em7        C9
+No silêncio Ele é Deus..." class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-sky-500"></textarea>
+          </div>
+
+          <div class="border-2 border-dashed border-slate-800 rounded-xl p-3 text-center bg-slate-950/50">
+            <span class="text-xl block mb-0.5">🎵</span>
+            <p class="text-xs font-semibold text-slate-200">Áudios & Stems</p>
+            <p class="text-[10px] text-slate-400">Click & Guia mapeados no canal L, instrumentos no canal R.</p>
+          </div>
+        </div>
+      </div>
+
+      <button id="btn-submit-song" onclick="handleCreateSong()" class="w-full mt-4 py-3 bg-sky-500 hover:bg-sky-400 text-black font-bold rounded-xl shadow-lg transition">
+        Salvar no Acervo da Banda ➔
+      </button>
+    </section>
+
+    <!-- ============================================================= -->
+    <!-- MODAL: ADICIONAR MÚSICAS À PLAYLIST -->
+    <!-- ============================================================= -->
+    <div id="add-modal" class="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex-col justify-end">
+      <div class="bg-slate-900 border-t border-slate-800 rounded-t-3xl p-5 max-h-[85%] flex flex-col shadow-2xl">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <h3 class="text-base font-bold text-white">Adicionar à Playlist</h3>
+            <p class="text-[11px] text-slate-400">Selecione do acervo ou envie uma nova música</p>
+          </div>
+          <button onclick="closeAddModal()" class="w-7 h-7 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center font-bold">✕</button>
+        </div>
+
+        <button onclick="closeAddModal(); switchScreen('upload')" class="w-full py-2.5 mb-3 rounded-xl border border-dashed border-sky-500/50 text-sky-400 hover:bg-sky-500/10 text-xs font-bold transition flex items-center justify-center gap-1.5">
+          <span>+</span> Subir Nova Música Agora
+        </button>
+
+        <div id="modal-songs-list" class="space-y-2 overflow-y-auto max-h-[260px] my-2 pr-1">
+          <!-- Lista de checkboxes -->
+        </div>
+
+        <button onclick="confirmSelectedSongs()" class="w-full mt-3 py-2.5 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-xl transition">
+          Confirmar Selecionadas
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- SUPABASE INTEGRATION & AUDIO SCRIPT -->
+  <script>
+    const SUPABASE_URL = 'https://mkafhbwuzbvbusdavwdo.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_N8OL_UH-CxwsPdsf4ZiQGQ_mK0PoV1j';
+
+    let masterLibrary = [];
+    let currentSetlist = [];
+    let currentPlayingSong = null;
+    let currentOffset = 0;
+    let isPlaying = false;
+    let playInterval = null;
+    let currentBeat = 1;
+    let currentBar = 1;
+
+    const chromaticScale = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+    function switchScreen(screenName) {
+      document.querySelectorAll('.screen-view').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('bg-sky-500', 'text-black', 'font-semibold', 'shadow-sm');
+        btn.classList.add('text-slate-400');
+      });
+
+      const targetScreen = document.getElementById('screen-' + screenName);
+      if (targetScreen) targetScreen.classList.remove('hidden');
+
+      const activeBtn = document.getElementById('btn-' + screenName);
+      if (activeBtn) {
+        activeBtn.classList.remove('text-slate-400');
+        activeBtn.classList.add('bg-sky-500', 'text-black', 'font-semibold', 'shadow-sm');
+      }
+    }
+
+    // Sincronização em tempo real com o Supabase
+    async function syncWithSupabase() {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/songs?select=*&order=title.asc`, {
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+          }
+        });
+
+        if (res.ok) {
+          const songs = await res.json();
+          masterLibrary = songs.map(s => ({
+            id: s.id,
+            title: s.title,
+            artist: s.artist || 'Minha Banda',
+            key: s.original_key || 'G',
+            bpm: s.bpm || 120,
+            isMultiTrack: s.is_multitrack !== false,
+            chordsText: s.chords_text || '',
+            pitchOffset: 0,
+            stems: [
+              { name: 'CLICK', isCue: true, volume: 95 },
+              { name: 'GUIA', isCue: true, volume: 80 },
+              { name: 'PAD / AMBIENCE', isCue: false, volume: 85 },
+              { name: 'INSTRUMENTOS', isCue: false, volume: 75 }
+            ]
+          }));
+
+          renderLibrary();
+          renderSetlist();
+        }
+      } catch (e) {
+        console.error('Erro ao sincronizar com o Supabase:', e);
+      }
+    }
+
+    // Cadastro de nova música no Supabase
+    async function handleCreateSong() {
+      const title = document.getElementById('new-song-title').value.trim();
+      const artist = document.getElementById('new-song-artist').value.trim() || 'Minha Banda';
+      const key = document.getElementById('new-song-key').value;
+      const bpm = parseInt(document.getElementById('new-song-bpm').value.trim()) || 120;
+      const chords = document.getElementById('new-song-chords').value.trim();
+
+      if (!title) {
+        alert('Por favor, informe o título da música!');
+        return;
+      }
+
+      const btn = document.getElementById('btn-submit-song');
+      btn.innerText = 'Salvando na nuvem...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/songs`, {
+          method: 'POST',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify({
+            title: title,
+            artist: artist,
+            original_key: key,
+            bpm: bpm,
+            time_signature: '4/4',
+            is_multitrack: true,
+            chords_text: chords
+          })
+        });
+
+        if (res.ok) {
+          const inserted = await res.json();
+          const createdSong = {
+            id: inserted[0].id,
+            title: title,
+            artist: artist,
+            key: key,
+            bpm: bpm,
+            isMultiTrack: true,
+            chordsText: chords,
+            pitchOffset: 0,
+            stems: [
+              { name: 'CLICK', isCue: true, volume: 95 },
+              { name: 'GUIA', isCue: true, volume: 80 },
+              { name: 'PAD / AMBIENCE', isCue: false, volume: 85 },
+              { name: 'INSTRUMENTOS', isCue: false, volume: 75 }
+            ]
+          };
+
+          masterLibrary.push(createdSong);
+          currentSetlist.push(createdSong);
+
+          document.getElementById('new-song-title').value = '';
+          document.getElementById('new-song-artist').value = '';
+          document.getElementById('new-song-chords').value = '';
+
+          renderLibrary();
+          renderSetlist();
+          loadSongIntoMixer(createdSong);
+
+          alert(`✅ Música "${title}" salva no Supabase com sucesso! Disponível para todos da banda.`);
+          switchScreen('setlists');
+        } else {
+          const err = await res.text();
+          alert('Erro ao salvar no Supabase: ' + err);
+        }
+      } catch (e) {
+        alert('Falha na conexão: ' + e);
+      } finally {
+        btn.innerText = 'Salvar no Acervo da Banda ➔';
+        btn.disabled = false;
+      }
+    }
+
+    // Exclusão de música do acervo
+    async function deleteSongFromCloud(songId, songTitle) {
+      if (!confirm(`Deseja excluir "${songTitle}" do acervo geral da banda?`)) return;
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/songs?id=eq.${songId}`, {
+          method: 'DELETE',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+          }
+        });
+        masterLibrary = masterLibrary.filter(s => s.id !== songId);
+        currentSetlist = currentSetlist.filter(s => s.id !== songId);
+        renderLibrary();
+        renderSetlist();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderSetlist() {
+      const container = document.getElementById('setlist-songs-container');
+      const countLabel = document.getElementById('playlist-count-label');
+      const openMixerBtn = document.getElementById('btn-open-mixer-bar');
+
+      countLabel.innerText = `${currentSetlist.length} Música(s) na Playlist`;
+
+      if (currentSetlist.length === 0) {
+        container.innerHTML = `
+          <div class="py-12 px-4 text-center border-2 border-dashed border-slate-800/80 rounded-2xl bg-slate-950/40">
+            <div class="w-12 h-12 mx-auto rounded-full bg-slate-800/60 flex items-center justify-center text-xl mb-3">📋</div>
+            <h3 class="text-sm font-bold text-slate-200">Nenhuma música na playlist</h3>
+            <p class="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Adicione músicas do acervo da banda ou cadastre uma nova faixa.</p>
+            <button onclick="openAddModal()" class="mt-4 px-4 py-2 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-xl shadow transition">
+              + Adicionar Músicas Agora
+            </button>
+          </div>
+        `;
+        openMixerBtn.className = "w-full mt-4 py-3 bg-slate-800 text-slate-500 font-bold rounded-xl shadow cursor-not-allowed";
+        return;
+      }
+
+      openMixerBtn.className = "w-full mt-4 py-3 bg-sky-500 hover:bg-sky-400 text-black font-bold rounded-xl shadow-lg transition";
+
+      let html = '';
+      currentSetlist.forEach((s, idx) => {
+        const transposedKey = transposeNote(s.key, s.pitchOffset || 0);
+        html += `
+          <div class="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 flex items-center justify-between hover:border-sky-500/50 transition">
+            <div onclick="selectSongFromSetlist(${idx})" class="flex items-center gap-3 cursor-pointer flex-1">
+              <span class="text-xs font-bold text-sky-400 w-4">${String(idx + 1).padStart(2, '0')}</span>
+              <div>
+                <h3 class="text-sm font-semibold text-white">${s.title}</h3>
+                <p class="text-[11px] text-slate-400">${s.artist} • Tom: <b class="text-amber-400">${transposedKey}</b> • ${s.bpm} BPM</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="removeSongFromSetlist(${idx})" class="text-slate-500 hover:text-rose-400 p-1 text-sm" title="Remover da playlist">✕</button>
+            </div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    function removeSongFromSetlist(idx) {
+      currentSetlist.splice(idx, 1);
+      renderSetlist();
+    }
+
+    function renderLibrary(filtered = null) {
+      const list = document.getElementById('library-list');
+      const countLabel = document.getElementById('library-count-label');
+      const items = filtered !== null ? filtered : masterLibrary;
+      countLabel.innerText = `${masterLibrary.length} Músicas no acervo da nuvem`;
+
+      if (items.length === 0) {
+        list.innerHTML = `
+          <div class="py-12 px-4 text-center border-2 border-dashed border-slate-800/80 rounded-2xl bg-slate-950/40">
+            <div class="w-12 h-12 mx-auto rounded-full bg-slate-800/60 flex items-center justify-center text-xl mb-3">🏛️</div>
+            <h3 class="text-sm font-bold text-slate-200">Nenhuma música encontrada</h3>
+            <p class="text-xs text-slate-400 mt-1 max-w-xs mx-auto">Cadastre as músicas da banda para montar o repertório em segundos.</p>
+            <button onclick="switchScreen('upload')" class="mt-4 px-4 py-2 bg-sky-500 hover:bg-sky-400 text-black text-xs font-bold rounded-xl shadow transition">
+              + Cadastrar Primeira Música
+            </button>
+          </div>
+        `;
+        return;
+      }
+
+      let html = '';
+      items.forEach(s => {
+        const inSetlist = currentSetlist.some(cs => cs.id === s.id);
+        html += `
+          <div class="p-3 bg-slate-950/70 rounded-xl border border-slate-800/80 flex items-center justify-between">
+            <div>
+              <h3 class="text-xs font-bold text-white">${s.title}</h3>
+              <p class="text-[10px] text-slate-400">${s.artist} • Tom: <b class="text-amber-400">${s.key}</b> • ${s.bpm} BPM</p>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button onclick="addFromLibToSetlist('${s.id}')" class="text-xs ${inSetlist ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-sky-500/20 text-sky-400 border border-sky-500/30 hover:bg-sky-500 hover:text-black'} px-2 py-1 rounded transition">
+                ${inSetlist ? '✓ Na Playlist' : '+ Playlist'}
+              </button>
+              <button onclick="deleteSongFromCloud('${s.id}', '${s.title}')" class="text-slate-600 hover:text-rose-400 p-1 text-xs" title="Excluir do acervo">🗑️</button>
+            </div>
+          </div>
+        `;
+      });
+      list.innerHTML = html;
+    }
+
+    function filterLibrary(query) {
+      const q = query.toLowerCase().trim();
+      if (!q) {
+        renderLibrary();
+        return;
+      }
+      const filtered = masterLibrary.filter(s => 
+        s.title.toLowerCase().includes(q) || 
+        s.artist.toLowerCase().includes(q) ||
+        s.key.toLowerCase().includes(q)
+      );
+      renderLibrary(filtered);
+    }
+
+    function openAddModal() {
+      renderModalList();
+      document.getElementById('add-modal').classList.remove('hidden');
+      document.getElementById('add-modal').classList.add('flex');
+    }
+
+    function closeAddModal() {
+      document.getElementById('add-modal').classList.add('hidden');
+      document.getElementById('add-modal').classList.remove('flex');
+    }
+
+    function renderModalList() {
+      const container = document.getElementById('modal-songs-list');
+      if (masterLibrary.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-6 text-slate-400 text-xs">
+            Nenhuma música cadastrada no acervo ainda.<br>
+            Cadastre pelo botão acima!
+          </div>
+        `;
+        return;
+      }
+
+      let html = '';
+      masterLibrary.forEach(s => {
+        const alreadyIn = currentSetlist.some(cs => cs.id === s.id);
+        html += `
+          <label class="p-2.5 bg-slate-950/70 rounded-xl border border-slate-800 flex items-center justify-between cursor-pointer hover:border-slate-700">
+            <div class="flex items-center gap-2.5">
+              <input type="checkbox" value="${s.id}" ${alreadyIn ? 'checked disabled' : ''} class="accent-sky-500 w-4 h-4 rounded">
+              <div>
+                <span class="text-xs font-bold ${alreadyIn ? 'text-slate-400' : 'text-white'} block">${s.title}</span>
+                <span class="text-[10px] text-slate-400">${s.artist} • Tom ${s.key} ${alreadyIn ? '(Já na playlist)' : ''}</span>
+              </div>
+            </div>
+            <span class="text-[9px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono">MULTITRACK</span>
+          </label>
+        `;
+      });
+      container.innerHTML = html;
+    }
+
+    function addFromLibToSetlist(songId) {
+      const s = masterLibrary.find(item => item.id === songId);
+      if (s && !currentSetlist.some(cs => cs.id === s.id)) {
+        currentSetlist.push(s);
+        renderSetlist();
+        renderLibrary();
+      }
+    }
+
+    function confirmSelectedSongs() {
+      const checkedBoxes = document.querySelectorAll('#modal-songs-list input[type=checkbox]:checked:not(:disabled)');
+      checkedBoxes.forEach(cb => {
+        const s = masterLibrary.find(item => item.id === cb.value);
+        if (s && !currentSetlist.some(cs => cs.id === s.id)) {
+          currentSetlist.push(s);
+        }
+      });
+      renderSetlist();
+      closeAddModal();
+    }
+
+    function selectSongFromSetlist(index) {
+      const s = currentSetlist[index];
+      loadSongIntoMixer(s);
+      switchScreen('mixer');
+    }
+
+    function loadSongIntoMixer(song) {
+      currentPlayingSong = song;
+      currentOffset = song.pitchOffset || 0;
+
+      document.getElementById('mixer-empty-state').classList.add('hidden');
+      document.getElementById('mixer-active-area').classList.remove('hidden');
+      document.getElementById('mixer-active-area').classList.add('flex');
+
+      document.getElementById('chords-empty-state').classList.add('hidden');
+      document.getElementById('chords-active-area').classList.remove('hidden');
+      document.getElementById('chords-active-area').classList.add('flex');
+
+      document.getElementById('mixer-song-artist').innerText = song.artist;
+      document.getElementById('mixer-song-title').innerText = song.title;
+      document.getElementById('mixer-song-orig-key').innerText = song.key;
+      document.getElementById('mixer-song-bpm').innerText = song.bpm;
+      document.getElementById('chord-song-title').innerText = song.title;
+
+      updateKeyDisplays();
+
+      // Renderiza tracks
+      const tracksContainer = document.getElementById('mixer-tracks-container');
+      tracksContainer.innerHTML = `
+        <div class="flex items-center gap-2">
+          <div class="w-24"><span class="text-[11px] font-bold text-amber-400">CLICK</span><span class="text-[9px] text-slate-400 block font-mono">FONE (L)</span></div>
+          <input type="range" min="0" max="100" value="95" class="flex-1 accent-amber-400">
+          <div class="flex gap-1 text-[10px] font-bold"><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">M</button><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">S</button></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="w-24"><span class="text-[11px] font-bold text-amber-400">GUIA</span><span class="text-[9px] text-slate-400 block font-mono">FONE (L)</span></div>
+          <input type="range" min="0" max="100" value="80" class="flex-1 accent-amber-400">
+          <div class="flex gap-1 text-[10px] font-bold"><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">M</button><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">S</button></div>
+        </div>
+        <div class="border-t border-slate-800 my-1 pt-1 flex justify-between items-center text-[10px] text-sky-400 font-mono">
+          <span>PISTAS DA BANDA (PITCH APLICADO)</span><span>P.A. (R)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="w-24 truncate"><span class="text-[11px] font-medium text-slate-200">PAD / ATMO</span></div>
+          <input type="range" min="0" max="100" value="85" class="flex-1">
+          <div class="flex gap-1 text-[10px] font-bold"><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">M</button><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">S</button></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="w-24 truncate"><span class="text-[11px] font-medium text-slate-200">INSTRUMENTOS</span></div>
+          <input type="range" min="0" max="100" value="75" class="flex-1">
+          <div class="flex gap-1 text-[10px] font-bold"><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">M</button><button class="px-2 py-0.5 rounded bg-slate-800 text-slate-400 hover:text-white">S</button></div>
+        </div>
+      `;
+
+      updateChordsDisplay();
+    }
+
+    function transposeNote(note, semitones) {
+      if (semitones === 0) return note;
+      const cleanNote = note.replace(/m|maj|7|9|4|dim|sus/g, '');
+      const idx = chromaticScale.indexOf(cleanNote);
+      if (idx === -1) return note;
+      let newIdx = (idx + semitones) % chromaticScale.length;
+      if (newIdx < 0) newIdx += chromaticScale.length;
+      return note.replace(cleanNote, chromaticScale[newIdx]);
+    }
+
+    function changePitch(delta) {
+      if (!currentPlayingSong) return;
+      currentOffset = Math.max(-6, Math.min(6, currentOffset + delta));
+      currentPlayingSong.pitchOffset = currentOffset;
+      updateKeyDisplays();
+      updateChordsDisplay();
+      renderSetlist();
+    }
+
+    function updateKeyDisplays() {
+      const transposedKey = transposeNote(currentPlayingSong.key, currentOffset);
+      const badge = document.getElementById('current-key-badge');
+      const offsetBadge = document.getElementById('pitch-offset-badge');
+      const chordBadge = document.getElementById('chord-key-badge');
+
+      badge.innerText = transposedKey;
+      chordBadge.innerText = 'Tom ' + transposedKey;
+
+      if (currentOffset === 0) {
+        offsetBadge.innerText = '(Original)';
+        offsetBadge.className = 'text-[9px] text-amber-300 font-mono font-semibold';
+      } else {
+        const sign = currentOffset > 0 ? `+${currentOffset}` : `${currentOffset}`;
+        offsetBadge.innerText = `(${sign} semitons)`;
+        offsetBadge.className = currentOffset > 0 ? 'text-[9px] text-emerald-400 font-mono font-bold' : 'text-[9px] text-rose-400 font-mono font-bold';
+      }
+    }
+
+    function updateChordsDisplay() {
+      const box = document.getElementById('chord-content-box');
+      const transposedKey = transposeNote(currentPlayingSong.key, currentOffset);
+      const chords = currentPlayingSong.chordsText;
+
+      if (!chords) {
+        box.innerHTML = `
+          <div>
+            <span class="text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 px-2 py-0.5 rounded">ESTRUTURA</span>
+            <p class="text-amber-400 font-bold mt-2">Tom Atual: ${transposedKey} (Original: ${currentPlayingSong.key}) • ${currentPlayingSong.bpm} BPM</p>
+            <p class="text-slate-400 font-sans mt-2">Nenhuma letra ou cifra cadastrada para esta música.</p>
+          </div>
+        `;
+        return;
+      }
+
+      box.innerHTML = `
+        <div>
+          <span class="text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 px-2 py-0.5 rounded">CIFRA SINCRONIZADA</span>
+          <p class="text-amber-400 font-bold my-2">Tom: ${transposedKey} • ${currentPlayingSong.bpm} BPM</p>
+          <pre class="text-slate-200 whitespace-pre-wrap leading-relaxed">${chords}</pre>
+        </div>
+      `;
+    }
+
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      document.getElementById('play-pause-label').innerText = isPlaying ? '⏸️ PAUSAR' : '▶️ REPRODUZIR';
+
+      if (isPlaying) {
+        startTicker();
+      } else {
+        clearInterval(playInterval);
+      }
+    }
+
+    function stopPlayback() {
+      isPlaying = false;
+      clearInterval(playInterval);
+      currentBar = 1;
+      currentBeat = 1;
+      document.getElementById('play-pause-label').innerText = '▶️ REPRODUZIR';
+      document.getElementById('bar-display').innerText = '1';
+      updateBeatIndicators(1);
+    }
+
+    function startTicker() {
+      clearInterval(playInterval);
+      const bpm = currentPlayingSong ? currentPlayingSong.bpm : 120;
+      const intervalMs = (60 / bpm) * 1000;
+
+      playInterval = setInterval(() => {
+        currentBeat++;
+        if (currentBeat > 4) {
+          currentBeat = 1;
+          currentBar++;
+        }
+        document.getElementById('bar-display').innerText = currentBar;
+        updateBeatIndicators(currentBeat);
+      }, intervalMs);
+    }
+
+    function updateBeatIndicators(beat) {
+      for (let i = 1; i <= 4; i++) {
+        const dot = document.getElementById(`beat-${i}`);
+        if (dot) {
+          dot.className = (i === beat) ? 'w-2.5 h-2.5 rounded-full bg-sky-400 inline-block shadow' : 'w-2 h-2 rounded-full bg-slate-700 inline-block';
+        }
+      }
+    }
+
+    function nextSong() {
+      if (!currentPlayingSong || currentSetlist.length <= 1) return;
+      const curIdx = currentSetlist.findIndex(s => s.id === currentPlayingSong.id);
+      const nextIdx = (curIdx + 1) % currentSetlist.length;
+      loadSongIntoMixer(currentSetlist[nextIdx]);
+    }
+
+    function prevSong() {
+      if (!currentPlayingSong || currentSetlist.length <= 1) return;
+      const curIdx = currentSetlist.findIndex(s => s.id === currentPlayingSong.id);
+      const prevIdx = (curIdx - 1 + currentSetlist.length) % currentSetlist.length;
+      loadSongIntoMixer(currentSetlist[prevIdx]);
+    }
+
+    // Inicialização ao carregar a página
+    syncWithSupabase();
+  </script>
+</body>
+</html>
