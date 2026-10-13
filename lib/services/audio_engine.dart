@@ -7,10 +7,10 @@ import '../models/setlist.dart';
 import 'pitch_shifter.dart';
 
 class AudioEngine extends ChangeNotifier {
-  // ACERVO GERAL (Todas as músicas já cadastradas pela banda)
+  // ACERVO GERAL (Inicia 100% limpo, sem músicas de teste)
   final List<Song> _masterLibrary = [];
 
-  // PLAYLIST ATUAL (Músicas selecionadas para a semana/show)
+  // PLAYLIST ATUAL (Inicia vazia para a banda criar)
   Setlist? _currentSetlist;
   int _currentSongIndex = 0;
   
@@ -19,13 +19,13 @@ class AudioEngine extends ChangeNotifier {
   int _pitchOffset = 0;           // -6 a +6 semitons
 
   double _currentPositionSeconds = 0.0;
-  double _totalDurationSeconds = 288.0; // 04:48
+  double _totalDurationSeconds = 240.0;
   int _currentBar = 1;
   int _currentBeat = 1;
   Timer? _playbackTicker;
 
   AudioEngine() {
-    _initializeMockData();
+    _initializeCleanState();
   }
 
   // Getters
@@ -34,6 +34,7 @@ class AudioEngine extends ChangeNotifier {
   int get currentSongIndex => _currentSongIndex;
   Song? get currentSong {
     if (_currentSetlist == null || _currentSetlist!.songs.isEmpty) return null;
+    if (_currentSongIndex >= _currentSetlist!.songs.length) return null;
     return _currentSetlist!.songs[_currentSongIndex];
   }
   bool get isPlaying => _isPlaying;
@@ -50,11 +51,7 @@ class AudioEngine extends ChangeNotifier {
     return PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
   }
 
-  // ==========================================
   // GESTÃO DO ACERVO & PLAYLISTS
-  // ==========================================
-
-  /// Salva uma música no Acervo Geral
   void addSongToLibrary(Song song) {
     if (!_masterLibrary.any((s) => s.id == song.id)) {
       _masterLibrary.add(song);
@@ -62,7 +59,6 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
-  /// Adiciona uma música do Acervo para a Playlist da semana
   void addSongToCurrentSetlist(Song song) {
     if (_currentSetlist != null) {
       _currentSetlist!.songs.add(song);
@@ -70,7 +66,6 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
-  /// Adiciona múltiplas músicas selecionadas do Acervo
   void addMultipleSongsToSetlist(List<Song> songs) {
     if (_currentSetlist != null) {
       _currentSetlist!.songs.addAll(songs);
@@ -78,7 +73,6 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
-  /// Remove uma música da playlist da semana (sem apagar do acervo geral)
   void removeSongFromSetlist(int index) {
     if (_currentSetlist != null && index >= 0 && index < _currentSetlist!.songs.length) {
       _currentSetlist!.songs.removeAt(index);
@@ -91,6 +85,7 @@ class AudioEngine extends ChangeNotifier {
 
   // Controles de Reprodução
   void togglePlay() {
+    if (currentSong == null) return;
     _isPlaying = !_isPlaying;
     if (_isPlaying) {
       WakelockPlus.enable();
@@ -215,141 +210,17 @@ class AudioEngine extends ChangeNotifier {
     });
   }
 
-  void _initializeMockData() {
-    // 1. Cria músicas do Acervo Geral (Master Library)
-    final songVitorioso = Song(
-      id: 'lib-1',
-      title: 'Vitorioso És',
-      artist: 'Gabriel Guedes',
-      originalKey: 'B',
-      bpm: 130,
-      isMultiTrack: true,
-      stems: [
-        StemTrack(id: 's1-click', name: 'CLICK', isCue: true, volume: 0.95),
-        StemTrack(id: 's1-guia', name: 'GUIA', isCue: true, volume: 0.8),
-        StemTrack(id: 's1-pad', name: 'PAD / AMBIENCE', isCue: false, volume: 0.85),
-        StemTrack(id: 's1-keys', name: 'TECLADOS', isCue: false, volume: 0.75),
-        StemTrack(id: 's1-guitars', name: 'GUITARRAS', isCue: false, volume: 0.7),
-      ],
-    );
-
-    final songBondade = Song(
-      id: 'lib-2',
-      title: 'Bondade de Deus',
-      artist: 'Isaías Saad',
-      originalKey: 'Ab',
-      bpm: 70,
-      isMultiTrack: false,
-      stems: [
-        StemTrack(id: 's2-click', name: 'CLICK (L)', isCue: true, volume: 0.95),
-        StemTrack(id: 's2-pa', name: 'PLAYBACK (R)', isCue: false, volume: 0.85),
-      ],
-    );
-
-    final songOusado = Song(
-      id: 'lib-3',
-      title: 'Ousado Amor',
-      artist: 'Isaias Saad',
-      originalKey: 'G',
-      bpm: 68,
-      timeSignature: '6/8',
-      isMultiTrack: true,
-      sections: [
-        const SongSection(name: 'Intro', startSeconds: 0, startBar: 1),
-        const SongSection(name: 'Verso 1', startSeconds: 28, startBar: 9),
-        const SongSection(name: 'Refrão', startSeconds: 65, startBar: 17),
-        const SongSection(name: 'Verso 2', startSeconds: 110, startBar: 29),
-        const SongSection(name: 'Ponte', startSeconds: 160, startBar: 41),
-        const SongSection(name: 'Final', startSeconds: 220, startBar: 55),
-      ],
-      chordsText: '''
-INTRO: [ 6/8 ]
-Em7   D   C9   (2x)
-
-VERSO 1
-Em7                D                 C9
-Antes de eu falar, Tu cantavas sobre mim
-Em7               D             C9
-Tu tens sido tão, tão bom pra mim
-
-REFRÃO
-Em7            D                   C9         G
-Oh, impressionante, infinito e ousado amor de Deus
-Em7           D                 C9        G
-Oh, que deixa as noventa e nove só pra me buscar
-''',
-      stems: [
-        StemTrack(id: 's3-click', name: 'CLICK', isCue: true, volume: 0.95),
-        StemTrack(id: 's3-guia', name: 'GUIA', isCue: true, volume: 0.80),
-        StemTrack(id: 's3-pad', name: 'PAD / ATMO', isCue: false, volume: 0.85),
-        StemTrack(id: 's3-keys', name: 'TECLADOS', isCue: false, volume: 0.70),
-        StemTrack(id: 's3-guitars', name: 'GUITARRAS', isCue: false, volume: 0.65),
-      ],
-    );
-
-    final songRuja = Song(
-      id: 'lib-4',
-      title: 'Ruja o Leão',
-      artist: 'Talita Catanzaro',
-      originalKey: 'Em',
-      bpm: 74,
-      isMultiTrack: true,
-      stems: [
-        StemTrack(id: 's4-click', name: 'CLICK', isCue: true, volume: 0.95),
-        StemTrack(id: 's4-guia', name: 'GUIA', isCue: true, volume: 0.80),
-        StemTrack(id: 's4-pad', name: 'PAD', isCue: false, volume: 0.85),
-      ],
-    );
-
-    final songGraca = Song(
-      id: 'lib-5',
-      title: 'Graça Sem Fim',
-      artist: 'Morada',
-      originalKey: 'D',
-      bpm: 72,
-      isMultiTrack: true,
-      stems: [
-        StemTrack(id: 's5-click', name: 'CLICK', isCue: true, volume: 0.95),
-        StemTrack(id: 's5-pad', name: 'PAD', isCue: false, volume: 0.85),
-      ],
-    );
-
-    final songEleVive = Song(
-      id: 'lib-6',
-      title: 'Porque Ele Vive',
-      artist: 'Harpa Cristã',
-      originalKey: 'G',
-      bpm: 76,
-      isMultiTrack: false,
-      stems: [
-        StemTrack(id: 's6-click', name: 'CLICK (L)', isCue: true, volume: 0.95),
-        StemTrack(id: 's6-pa', name: 'TRACK (R)', isCue: false, volume: 0.85),
-      ],
-    );
-
-    _masterLibrary.addAll([
-      songVitorioso,
-      songBondade,
-      songOusado,
-      songRuja,
-      songGraca,
-      songEleVive,
-    ]);
-
-    // 2. Setlist inicial com algumas músicas selecionadas do acervo
+  // Inicializa o sistema 100% limpo sem dados mockados
+  void _initializeCleanState() {
+    _masterLibrary.clear();
     _currentSetlist = Setlist(
       id: 'setlist-1',
-      title: 'Culto de Domingo',
+      title: 'Playlist da Semana',
       date: DateTime.now(),
       isOfflineReady: true,
-      songs: [
-        songVitorioso,
-        songBondade,
-        songOusado,
-        songRuja,
-      ],
+      songs: [],
     );
-    _currentSongIndex = 2; // Ousado Amor
+    _currentSongIndex = 0;
   }
 
   @override

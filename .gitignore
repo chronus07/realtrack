@@ -19,10 +19,9 @@ migrate_working_dir/
 # Visual Studio Code related
 .vscode/
 
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
+# Build artifacts
+/build/
+build-artifacts/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages

@@ -15,7 +15,42 @@ class ChordsScreen extends StatelessWidget {
     final song = engine.currentSong;
 
     if (song == null) {
-      return const Center(child: Text('Nenhuma música selecionada'));
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Cifras', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: AppTheme.card,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                  child: const Icon(Icons.music_note, size: 36, color: Colors.white24),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Nenhuma cifra ativa',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Selecione uma música na playlist para visualizar os acordes com transposição em tempo real.',
+                  style: TextStyle(fontSize: 12, color: Colors.white54),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     final transposedChords = PitchShifterService.transposeChordSheet(
@@ -39,7 +74,6 @@ class ChordsScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          // Controle de Tom rápido na AppBar
           Container(
             margin: const EdgeInsets.only(right: 12),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -80,7 +114,6 @@ class ChordsScreen extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Column(
             children: [
-              // Área da Cifra com Scroll
               Expanded(
                 child: Container(
                   width: double.infinity,
@@ -92,7 +125,9 @@ class ChordsScreen extends StatelessWidget {
                   ),
                   child: SingleChildScrollView(
                     child: SelectableText(
-                      transposedChords,
+                      transposedChords.isEmpty
+                          ? 'Nenhuma letra ou cifra cadastrada para esta música.'
+                          : transposedChords,
                       style: const TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 13,
@@ -104,8 +139,6 @@ class ChordsScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-
-              // Mini Player no Rodapé
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(

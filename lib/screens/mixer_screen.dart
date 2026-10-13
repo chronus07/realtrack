@@ -16,7 +16,43 @@ class MixerScreen extends StatelessWidget {
     final song = engine.currentSong;
 
     if (song == null) {
-      return const Center(child: Text('Nenhuma música selecionada'));
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Mixer de Palco', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: AppTheme.card,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                  child: const Icon(Icons.tune, size: 36, color: Colors.white24),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Nenhuma música carregada no mixer',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Adicione músicas na playlist e selecione uma para controlar os faders, click e transposição de tom aqui.',
+                  style: TextStyle(fontSize: 12, color: Colors.white54),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -44,7 +80,6 @@ class MixerScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          // Switch de Split L/R para palco
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: GestureDetector(
@@ -91,15 +126,10 @@ class MixerScreen extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: Column(
             children: [
-              // 1. Barra de Transposição de Tom (Pitch Shifter)
               const PitchControlBar(),
               const SizedBox(height: 10),
-
-              // 2. Seções da Música (Pads de navegação)
               const SectionMarkers(),
               const SizedBox(height: 10),
-
-              // 3. Mixer de Pistas (Stems)
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.all(10),
@@ -111,7 +141,6 @@ class MixerScreen extends StatelessWidget {
                   child: ListView.separated(
                     itemCount: song.stems.length,
                     separatorBuilder: (context, index) {
-                      // Se o próximo stem for da banda e o anterior era CUE, adiciona divisor
                       if (index < song.stems.length - 1 &&
                           song.stems[index].isCue &&
                           !song.stems[index + 1].isCue) {
@@ -141,8 +170,6 @@ class MixerScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 10),
-
-              // 4. Barra de Transporte (Play/Pause, Tempo, Compasso)
               const TransportBar(),
             ],
           ),
