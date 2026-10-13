@@ -18,22 +18,10 @@ void main() async {
   // Configuração global de áudio: Permite reproduzir 16+ pistas simultâneas sem conflito de foco no Android/iOS
   try {
     await AudioPlayer.global.setAudioContext(
-      AudioContext(
-        android: const AudioContextAndroid(
-          isSpeakerphoneOn: true,
-          stayAwake: true,
-          contentType: AndroidContentType.music,
-          usageType: AndroidUsageType.media,
-          audioFocus: AndroidAudioFocus.none,
-        ),
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback,
-          options: const [
-            AVAudioSessionOptions.mixWithOthers,
-            AVAudioSessionOptions.defaultToSpeaker,
-          ],
-        ),
-      ),
+      AudioContextConfig(
+        focus: AudioContextConfigFocus.none,
+        stayAwake: true,
+      ).build(),
     );
   } catch (e) {
     debugPrint('Configuração global de AudioContext: $e');

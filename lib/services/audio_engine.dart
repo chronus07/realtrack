@@ -55,22 +55,10 @@ class AudioEngine extends ChangeNotifier {
   void _initAudioGlobal() {
     try {
       AudioPlayer.global.setAudioContext(
-        AudioContext(
-          android: const AudioContextAndroid(
-            isSpeakerphoneOn: true,
-            stayAwake: true,
-            contentType: AndroidContentType.music,
-            usageType: AndroidUsageType.media,
-            audioFocus: AndroidAudioFocus.none,
-          ),
-          iOS: AudioContextIOS(
-            category: AVAudioSessionCategory.playback,
-            options: const [
-              AVAudioSessionOptions.mixWithOthers,
-              AVAudioSessionOptions.defaultToSpeaker,
-            ],
-          ),
-        ),
+        AudioContextConfig(
+          focus: AudioContextConfigFocus.none,
+          stayAwake: true,
+        ).build(),
       );
     } catch (e) {
       debugPrint('AudioEngine global audio context error: $e');
@@ -458,22 +446,10 @@ class AudioEngine extends ChangeNotifier {
               // Configura contexto sem roubo de foco de áudio por pista (fundamental no Android)
               try {
                 await player.setAudioContext(
-                  AudioContext(
-                    android: const AudioContextAndroid(
-                      isSpeakerphoneOn: true,
-                      stayAwake: true,
-                      contentType: AndroidContentType.music,
-                      usageType: AndroidUsageType.media,
-                      audioFocus: AndroidAudioFocus.none,
-                    ),
-                    iOS: AudioContextIOS(
-                      category: AVAudioSessionCategory.playback,
-                      options: const [
-                        AVAudioSessionOptions.mixWithOthers,
-                        AVAudioSessionOptions.defaultToSpeaker,
-                      ],
-                    ),
-                  ),
+                  AudioContextConfig(
+                    focus: AudioContextConfigFocus.none,
+                    stayAwake: true,
+                  ).build(),
                 );
               } catch (_) {}
 
