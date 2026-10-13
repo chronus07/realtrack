@@ -102,6 +102,20 @@ class _UploadScreenState extends State<UploadScreen> {
       return;
     }
 
+    // Validação preventiva: limite de 50MB da nuvem gratuita
+    final oversizedStems = _selectedStems.where((s) => s.file.size > 50 * 1024 * 1024).toList();
+    if (oversizedStems.isNotEmpty) {
+      final names = oversizedStems.map((s) => '${s.name} (${(s.file.size / (1024 * 1024)).toStringAsFixed(1)} MB)').join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('⚠️ Faixa(s) maior(es) que 50 MB detectadas: $names. O limite da nuvem gratuita é 50 MB por pista. Utilize áudios em .m4a ou .mp3 (qualidade 320kbps) para subir perfeitamente.'),
+          backgroundColor: AppTheme.amberCue,
+          duration: const Duration(seconds: 8),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isUploading = true;
       _uploadProgress = 0.05;
@@ -132,7 +146,12 @@ class _UploadScreenState extends State<UploadScreen> {
           },
         );
       } catch (e) {
-        cloudError = e.toString();
+        final msg = e.toString();
+        if (msg.contains('413') || msg.contains('exceeded the maximum allowed size') || msg.contains('Payload too large')) {
+          cloudError = 'Faixa maior que 50 MB detectada. Converta os arquivos para .m4a ou .mp3 (qualidade 320kbps) para enviar.';
+        } else {
+          cloudError = msg;
+        }
         debugPrint('Upload no Supabase falhou: $e');
       }
 
@@ -454,8 +473,12 @@ class _UploadScreenState extends State<UploadScreen> {
                                   overflow: TextOverflow.ellipsis,
                                 ),
                                 Text(
-                                  '${(item.file.size / (1024 * 1024)).toStringAsFixed(1)} MB • ${item.file.name}',
-                                  style: const TextStyle(fontSize: 9, color: Colors.white38),
+                                  '${(item.file.size / (1024 * 1024)).toStringAsFixed(1)} MB • ${item.file.name}${item.file.size > 50 * 1024 * 1024 ? " ⚠️ (>50MB)" : ""}',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: item.file.size > 50 * 1024 * 1024 ? AppTheme.roseMute : Colors.white38,
+                                    fontWeight: item.file.size > 50 * 1024 * 1024 ? FontWeight.bold : FontWeight.normal,
+                                  ),
                                 ),
                               ],
                             ),

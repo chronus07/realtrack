@@ -93,6 +93,7 @@ class SupabaseService {
       throw Exception('Supabase não configurado');
     }
 
+    String? createdSongId;
     try {
       onProgress?.call(0.1, 'Salvando metadados da música no acervo...');
 
@@ -108,6 +109,7 @@ class SupabaseService {
       }).select().single();
 
       final String songId = songInsertResponse['id'];
+      createdSongId = songId;
       final List<StemTrack> createdStems = [];
 
       // 2. Upload de cada arquivo de áudio para o bucket `audio-tracks`
@@ -169,6 +171,11 @@ class SupabaseService {
         stems: createdStems,
       );
     } catch (e) {
+      if (createdSongId != null) {
+        try {
+          await client.from('songs').delete().eq('id', createdSongId);
+        } catch (_) {}
+      }
       debugPrint('Erro ao fazer upload da música: $e');
       rethrow;
     }
