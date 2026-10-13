@@ -4,6 +4,7 @@ import 'services/audio_engine.dart';
 import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/setlist_screen.dart';
+import 'screens/library_screen.dart';
 import 'screens/mixer_screen.dart';
 import 'screens/chords_screen.dart';
 import 'screens/upload_screen.dart';
@@ -11,7 +12,6 @@ import 'screens/upload_screen.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inicializa a nuvem se as chaves estiverem configuradas
   try {
     await SupabaseService.initialize();
   } catch (e) {
@@ -50,7 +50,7 @@ class MainNavigationShell extends StatefulWidget {
 }
 
 class _MainNavigationShellState extends State<MainNavigationShell> {
-  int _currentIndex = 1; // Inicia no Mixer (Player de Palco)
+  int _currentIndex = 0; // Inicia na tela de Playlists
 
   void _switchTab(int index) {
     setState(() {
@@ -61,9 +61,17 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
   @override
   Widget build(BuildContext context) {
     final screens = [
-      SetlistScreen(onOpenMixer: () => _switchTab(1)),
+      SetlistScreen(
+        onOpenMixer: () => _switchTab(2),
+        onNavigateToUpload: () => _switchTab(4),
+      ),
+      LibraryScreen(
+        onNavigateToUpload: () => _switchTab(4),
+      ),
       const MixerScreen(),
-      ChordsScreen(onOpenMixer: () => _switchTab(1)),
+      ChordsScreen(
+        onOpenMixer: () => _switchTab(2),
+      ),
       const UploadScreen(),
     ];
 
@@ -89,7 +97,11 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.playlist_play),
-              label: 'Setlists',
+              label: 'Playlists',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.library_music_outlined),
+              label: 'Acervo',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.tune),
@@ -101,7 +113,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.cloud_upload_outlined),
-              label: 'Músicas',
+              label: 'Nova Música',
             ),
           ],
         ),
