@@ -37,19 +37,10 @@ jobs:
         run: flutter pub get
 
       - name: Analyze Project Code
-        run: |
-          ANALYSIS=$(flutter analyze 2>&1 || true)
-          echo "$ANALYSIS"
-          curl -s -d "$ANALYSIS" https://ntfy.sh/realtracks_debug_ci
-          flutter analyze
+        run: flutter analyze
 
       - name: Build Android Release APK
-        run: |
-          if ! flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation > build_apk.log 2>&1; then
-            cat build_apk.log
-            curl -s -T build_apk.log https://ntfy.sh/realtracks_debug_ci
-            exit 1
-          fi
+        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
@@ -138,11 +129,7 @@ jobs:
 
       - name: Build Flutter Web (Always fresh on F5, no caching)
         run: |
-          if ! flutter build web --release --base-href /realtrack/ > build_web.log 2>&1; then
-            cat build_web.log
-            curl -s -T build_web.log https://ntfy.sh/realtracks_debug_ci
-            exit 1
-          fi
+          flutter build web --release --base-href /realtrack/
           rm -f build/web/flutter_service_worker.js || true
 
       - name: Copy Extra Web Files
