@@ -420,8 +420,71 @@ class _SetlistScreenState extends State<SetlistScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Tom Original: ${song.originalKey}',
+                    'Tom Original (Acervo): ${song.originalKey}',
                     style: const TextStyle(fontSize: 12, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppTheme.background,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppTheme.amberCue),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          transposedKey,
+                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.amberCue),
+                        ),
+                        Text(
+                          tempOffset == 0 ? 'Tom Original' : '${tempOffset > 0 ? "+$tempOffset" : tempOffset} semitons',
+                          style: const TextStyle(fontSize: 10, color: Colors.white60),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Grid de Tons para 1 Toque
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    alignment: WrapAlignment.center,
+                    children: PitchShifterService.standardKeys.map((k) {
+                      final isSelected = k == transposedKey;
+                      final isOrig = k == song.originalKey;
+                      return InkWell(
+                        onTap: () {
+                          setModalState(() {
+                            tempOffset = PitchShifterService.getSemitonesBetween(song.originalKey, k);
+                          });
+                        },
+                        borderRadius: BorderRadius.circular(6),
+                        child: Container(
+                          width: 44,
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppTheme.amberCue
+                                : (isOrig ? AppTheme.primary.withOpacity(0.15) : AppTheme.background),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: isSelected ? AppTheme.amberCue : (isOrig ? AppTheme.primary : AppTheme.cardBorder),
+                              width: isSelected || isOrig ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Text(
+                            k,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: isSelected ? Colors.black : Colors.white,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -433,25 +496,9 @@ class _SetlistScreenState extends State<SetlistScreen> {
                             ? () => setModalState(() => tempOffset--)
                             : null,
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: AppTheme.background,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: AppTheme.primary),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              transposedKey,
-                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppTheme.amberCue),
-                            ),
-                            Text(
-                              tempOffset == 0 ? 'Original' : '${tempOffset > 0 ? "+$tempOffset" : tempOffset} semitons',
-                              style: const TextStyle(fontSize: 10, color: Colors.white60),
-                            ),
-                          ],
-                        ),
+                      TextButton(
+                        onPressed: () => setModalState(() => tempOffset = 0),
+                        child: const Text('Reset', style: TextStyle(color: Colors.white70)),
                       ),
                       IconButton(
                         icon: const Icon(Icons.add_circle_outline, color: AppTheme.primary),
@@ -469,13 +516,21 @@ class _SetlistScreenState extends State<SetlistScreen> {
                   child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
                 ),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary, foregroundColor: Colors.black),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.emeraldSafe, foregroundColor: Colors.black),
                   onPressed: () {
                     engine.updateSongPitchOffset(index, tempOffset);
                     Navigator.pop(ctx);
                     _saveSetlistToCloud();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          '✅ Tom $transposedKey salvo para "${song.title}" nesta playlist! O Acervo mantém ${song.originalKey}.',
+                        ),
+                        backgroundColor: AppTheme.emeraldSafe,
+                      ),
+                    );
                   },
-                  child: const Text('Salvar Tom'),
+                  child: const Text('Salvar Tom na Playlist', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
             );
@@ -880,11 +935,13 @@ class _SetlistScreenState extends State<SetlistScreen> {
                                                       border: Border.all(color: AppTheme.amberCue.withOpacity(0.4)),
                                                     ),
                                                     child: Text(
-                                                      'Tom: ${song.currentKey}${song.pitchOffsetSemitones != 0 ? " (${song.pitchOffsetSemitones > 0 ? "+${song.pitchOffsetSemitones}" : song.pitchOffsetSemitones})" : ""}',
-                                                      style: const TextStyle(
+                                                      song.pitchOffsetSemitones != 0
+                                                          ? 'Tom: ${song.currentKey} (${song.pitchOffsetSemitones > 0 ? "+${song.pitchOffsetSemitones}" : song.pitchOffsetSemitones} st) • Orig: ${song.originalKey}'
+                                                          : 'Tom: ${song.currentKey}',
+                                                      style: TextStyle(
                                                         fontSize: 10,
                                                         fontWeight: FontWeight.bold,
-                                                        color: AppTheme.amberCue,
+                                                        color: song.pitchOffsetSemitones != 0 ? AppTheme.amberCue : Colors.white70,
                                                       ),
                                                     ),
                                                   ),

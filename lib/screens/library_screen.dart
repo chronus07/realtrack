@@ -10,8 +10,13 @@ import '../theme/app_theme.dart';
 
 class LibraryScreen extends StatefulWidget {
   final VoidCallback onNavigateToUpload;
+  final VoidCallback? onOpenMixer;
 
-  const LibraryScreen({super.key, required this.onNavigateToUpload});
+  const LibraryScreen({
+    super.key,
+    required this.onNavigateToUpload,
+    this.onOpenMixer,
+  });
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -553,31 +558,37 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 final isInCurrentSetlist =
                                     engine.currentSetlist?.songs.any((s) => s.id == song.id) ?? false;
 
-                                return Container(
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.card,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AppTheme.cardBorder),
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              song.title,
-                                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              '${song.artist} • Tom: ${song.originalKey} • ${song.bpm} BPM • ${song.stems.length} pista(s)',
-                                              style: const TextStyle(fontSize: 11, color: Colors.white54),
-                                            ),
-                                          ],
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(12),
+                                  onTap: () {
+                                    engine.playLibrarySongInMixer(song);
+                                    widget.onOpenMixer?.call();
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.card,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: AppTheme.cardBorder),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                song.title,
+                                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '${song.artist} • Tom Original: ${song.originalKey} • ${song.bpm} BPM • ${song.stems.length} pista(s)',
+                                                style: const TextStyle(fontSize: 11, color: Colors.white54),
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                                         margin: const EdgeInsets.only(right: 6),
@@ -660,8 +671,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                       ),
                                     ],
                                   ),
-                                );
-                              },
+                                ),
+                              );
+                            },
                             ),
                           ),
               ),

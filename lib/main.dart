@@ -114,6 +114,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
         onNavigateToUpload: () => _switchTab(4),
       ),
       LibraryScreen(
+        onOpenMixer: () => _switchTab(2),
         onNavigateToUpload: () => _switchTab(4),
       ),
       const MixerScreen(),

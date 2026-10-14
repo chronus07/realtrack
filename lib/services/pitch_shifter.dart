@@ -18,11 +18,29 @@ class PitchShifterService {
     'B': 'Si'
   };
 
+  /// Lista padrão de 12 tons maiores para seleção direta
+  static const List<String> standardKeys = [
+    'C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'
+  ];
+
   /// Converte qualquer nota para o índice de 0 a 11
   static int getNoteIndex(String note) {
-    int idx = chromaticSharps.indexOf(note);
+    // Remove sufixo menor se houver (ex: Gm -> G)
+    final clean = note.trim().replaceAll('min', '').replaceAll('m', '');
+    int idx = chromaticSharps.indexOf(clean);
     if (idx != -1) return idx;
-    return chromaticFlats.indexOf(note);
+    return chromaticFlats.indexOf(clean);
+  }
+
+  /// Calcula a menor distância em semitons (-6 a +6) entre dois tons
+  static int getSemitonesBetween(String fromKey, String toKey) {
+    int fromIdx = getNoteIndex(fromKey);
+    int toIdx = getNoteIndex(toKey);
+    if (fromIdx == -1 || toIdx == -1) return 0;
+    int diff = (toIdx - fromIdx) % 12;
+    if (diff > 6) diff -= 12;
+    if (diff < -6) diff += 12;
+    return diff;
   }
 
   /// Transpõe uma nota individual por um número de semitons (-6 a +6)

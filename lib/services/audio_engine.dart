@@ -426,7 +426,7 @@ class AudioEngine extends ChangeNotifier {
   void addSongToSetlist(String setlistId, Song song) {
     final target = _allSetlists.firstWhere((s) => s.id == setlistId, orElse: () => _currentSetlist!);
     if (!target.songs.any((s) => s.id == song.id)) {
-      target.songs.add(song);
+      target.songs.add(song.clone());
       notifyListeners();
       SupabaseService.saveSetlistToCloud(target);
     }
@@ -435,7 +435,7 @@ class AudioEngine extends ChangeNotifier {
   void addSongToCurrentSetlist(Song song) {
     if (_currentSetlist != null) {
       if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
-        _currentSetlist!.songs.add(song);
+        _currentSetlist!.songs.add(song.clone());
         notifyListeners();
         SupabaseService.saveSetlistToCloud(_currentSetlist!);
       }
@@ -446,7 +446,7 @@ class AudioEngine extends ChangeNotifier {
     if (_currentSetlist != null) {
       for (final song in songs) {
         if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
-          _currentSetlist!.songs.add(song);
+          _currentSetlist!.songs.add(song.clone());
         }
       }
       notifyListeners();
@@ -888,11 +888,15 @@ class AudioEngine extends ChangeNotifier {
     if (song != null) {
       song.pitchOffsetSemitones = _pitchOffset;
       song.currentKey = PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
-      if (_currentSetlist != null) {
-        SupabaseService.saveSetlistToCloud(_currentSetlist!);
-      }
     }
     notifyListeners();
+  }
+
+  void setTargetKey(String newKey) {
+    final song = currentSong;
+    if (song == null) return;
+    final semitones = PitchShifterService.getSemitonesBetween(song.originalKey, newKey);
+    setPitchOffset(semitones);
   }
 
   void incrementPitch() {
@@ -909,6 +913,79 @@ class AudioEngine extends ChangeNotifier {
 
   void resetPitch() {
     setPitchOffset(0);
+  }
+
+  /// Salva e fixa o tom ajustado especificamente nesta Playlist (Setlist)
+  /// Mantendo 100% o tom original no Acervo Geral
+  Future<bool> saveCurrentSongKeyToPlaylist([Setlist? targetSetlist]) async {
+    final song = currentSong;
+    if (song == null) return false;
+    final setlist = targetSetlist ?? _currentSetlist;
+    if (setlist == null) return false;
+
+    // 1. Atualiza na playlist localmente
+    final idx = setlist.songs.indexWhere((s) => s.id == song.id);
+    if (idx != -1) {
+      setlist.songs[idx].pitchOffsetSemitones = _pitchOffset;
+      setlist.songs[idx].currentKey = song.currentKey;
+    } else {
+      setlist.songs.add(song.clone(
+        currentKey: song.currentKey,
+        pitchOffsetSemitones: _pitchOffset,
+      ));
+    }
+
+    // 2. Salva e persiste na nuvem Supabase (colunas custom_key e pitch_offset da playlist)
+    await SupabaseService.saveSetlistToCloud(setlist);
+
+    // 3. Garante que no Acervo Geral da banda a música permaneça com seu tom original
+    final libIdx = _masterLibrary.indexWhere((s) => s.id == song.id);
+    if (libIdx != -1) {
+      _masterLibrary[libIdx].pitchOffsetSemitones = 0;
+      _masterLibrary[libIdx].currentKey = _masterLibrary[libIdx].originalKey;
+    }
+
+    notifyListeners();
+    return true;
+  }
+
+  void playLibrarySongInMixer(Song librarySong) {
+    _disposeStemPlayers();
+    stop();
+
+    _pitchOffset = 0;
+
+    // Se já estiver na playlist atual, apenas seleciona
+    if (_currentSetlist != null) {
+      final existingIndex = _currentSetlist!.songs.indexWhere((s) => s.id == librarySong.id);
+      if (existingIndex != -1) {
+        _currentSongIndex = existingIndex;
+        _pitchOffset = _currentSetlist!.songs[existingIndex].pitchOffsetSemitones;
+        notifyListeners();
+        return;
+      }
+    }
+
+    // Se não estiver na playlist, cria preview no tom original
+    final cloned = librarySong.clone(
+      currentKey: librarySong.originalKey,
+      pitchOffsetSemitones: 0,
+    );
+
+    if (_currentSetlist == null) {
+      _currentSetlist = Setlist(
+        id: 'temp-acervo',
+        title: 'Acervo Geral',
+        date: DateTime.now(),
+        songs: [cloned],
+        isOfflineReady: true,
+      );
+      _currentSongIndex = 0;
+    } else {
+      _currentSetlist!.songs.add(cloned);
+      _currentSongIndex = _currentSetlist!.songs.length - 1;
+    }
+    notifyListeners();
   }
 
   // ==========================================

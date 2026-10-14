@@ -42,4 +42,34 @@ class Song {
     this.chordsText = '',
     this.isDownloaded = true,
   }) : currentKey = currentKey ?? originalKey;
+
+  Song clone({
+    String? currentKey,
+    int? pitchOffsetSemitones,
+  }) {
+    return Song(
+      id: id,
+      title: title,
+      artist: artist,
+      originalKey: originalKey,
+      currentKey: currentKey ?? this.currentKey,
+      pitchOffsetSemitones: pitchOffsetSemitones ?? this.pitchOffsetSemitones,
+      bpm: bpm,
+      timeSignature: timeSignature,
+      isMultiTrack: isMultiTrack,
+      stems: stems.map((s) => StemTrack(
+        id: s.id,
+        name: s.name,
+        volume: s.volume,
+        isMuted: s.isMuted,
+        isSolo: s.isSolo,
+        isCue: s.isCue,
+        pan: s.pan,
+        filePath: s.filePath,
+      )).toList(),
+      sections: List.from(sections),
+      chordsText: chordsText,
+      isDownloaded: isDownloaded,
+    );
+  }
 }
