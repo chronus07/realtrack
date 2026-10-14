@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
+import 'worship_catalog.dart';
 
 class AudioDetectionResult {
   final int? bpm;
@@ -45,10 +46,64 @@ class BpmKeyDetector {
   static Future<AudioDetectionResult> detectFromStemsAndMetadata({
     required List<String> fileNames,
     List<String>? filePaths,
-    List<Uint8List>? fileBytesList,
+    List<Uint8List?>? fileBytesList,
     String? songTitle,
     String? chordsText,
   }) async {
+    // ----------------------------------------------------
+    // PILAR 1: CONSULTA INSTANTÂNEA NO CATÁLOGO DE LOUVOR
+    // ----------------------------------------------------
+    if (songTitle != null && songTitle.trim().isNotEmpty) {
+      final catalogMatch = WorshipCatalog.lookup(songTitle);
+      if (catalogMatch != null) {
+        return AudioDetectionResult(
+          bpm: catalogMatch.bpm,
+          key: catalogMatch.key,
+          timeSignature: catalogMatch.timeSignature,
+          detectedTitle: catalogMatch.title,
+          detectedArtist: catalogMatch.artist,
+          confidence: 0.99,
+          source: 'Catálogo de Louvor (${catalogMatch.artist})',
+        );
+      }
+    }
+
+    // Verifica se algum dos arquivos ou pastas traz o nome de uma música do catálogo
+    for (final name in fileNames) {
+      final catalogMatch = WorshipCatalog.lookup(name);
+      if (catalogMatch != null) {
+        return AudioDetectionResult(
+          bpm: catalogMatch.bpm,
+          key: catalogMatch.key,
+          timeSignature: catalogMatch.timeSignature,
+          detectedTitle: catalogMatch.title,
+          detectedArtist: catalogMatch.artist,
+          confidence: 0.98,
+          source: 'Catálogo de Louvor (${catalogMatch.artist})',
+        );
+      }
+    }
+
+    if (filePaths != null) {
+      for (final p in filePaths) {
+        final catalogMatch = WorshipCatalog.lookup(p);
+        if (catalogMatch != null) {
+          return AudioDetectionResult(
+            bpm: catalogMatch.bpm,
+            key: catalogMatch.key,
+            timeSignature: catalogMatch.timeSignature,
+            detectedTitle: catalogMatch.title,
+            detectedArtist: catalogMatch.artist,
+            confidence: 0.98,
+            source: 'Catálogo de Louvor (${catalogMatch.artist})',
+          );
+        }
+      }
+    }
+
+    // ----------------------------------------------------
+    // PILAR 2: ANÁLISE DE TRANSISTENTES DE CLICK (.WAV E .M4A)
+    // ----------------------------------------------------
     int? detectedBpm;
     String? detectedKey;
     String? detectedTimeSig;
@@ -57,12 +112,18 @@ class BpmKeyDetector {
     String source = '';
     double confidence = 0.0;
 
-    // A. Análise do Click Track (se houver áudio e arquivo WAV/PCM ou identificação de Click)
     for (int i = 0; i < fileNames.length; i++) {
       final name = fileNames[i];
       final lower = name.toLowerCase();
-      if (lower.contains('click') || lower.contains('metronomo') || lower.contains('guia')) {
-        // Tenta ler BPM direto no nome do Click
+      if (lower.contains('click') ||
+          lower.contains('metronomo') ||
+          lower.contains('metronome') ||
+          lower.contains('guia') ||
+          lower.contains('guide') ||
+          lower.contains('cue') ||
+          lower.contains('count') ||
+          lower.contains('tempo')) {
+        // A. Tenta ler BPM direto no nome do Click (ex: Click_125.m4a)
         final bpmInClick = _extractBpmFromString(name);
         if (bpmInClick != null) {
           detectedBpm = bpmInClick;
@@ -71,12 +132,21 @@ class BpmKeyDetector {
           break;
         }
 
-        // Tenta análise de transientes PCM se for WAV
-        if (fileBytesList != null && i < fileBytesList.length && fileBytesList[i].length > 44) {
-          final pcmBpm = _detectBpmFromWavBytes(fileBytesList[i]);
+        // B. Análise PCM em arquivos .WAV
+        if (fileBytesList != null && i < fileBytesList.length && fileBytesList[i] != null && fileBytesList[i]!.length > 44) {
+          final pcmBpm = _detectBpmFromWavBytes(fileBytesList[i]!);
           if (pcmBpm != null) {
             detectedBpm = pcmBpm;
             source = 'Análise de Transientes de Áudio (Click)';
+            confidence = 0.98;
+            break;
+          }
+
+          // C. Análise de quadros AAC em arquivos .M4A
+          final m4aBpm = _detectBpmFromM4aBytes(fileBytesList[i]!);
+          if (m4aBpm != null) {
+            detectedBpm = m4aBpm;
+            source = 'Análise de Metrônomo AAC (Click)';
             confidence = 0.98;
             break;
           }
@@ -88,14 +158,24 @@ class BpmKeyDetector {
             confidence = 0.98;
             break;
           }
+
+          final m4aBpm = await _detectBpmFromM4aFile(filePaths[i]);
+          if (m4aBpm != null) {
+            detectedBpm = m4aBpm;
+            source = 'Análise de Metrônomo AAC Local (Click)';
+            confidence = 0.98;
+            break;
+          }
         }
       }
     }
 
-    // B. Leitura de Metadados Binários (ID3v2 TBPM / TKEY / MP4 tmpo)
+    // ----------------------------------------------------
+    // PILAR 3: METADADOS BINÁRIOS (ID3v2 TBPM / TKEY / MP4 tmpo)
+    // ----------------------------------------------------
     if (fileBytesList != null) {
       for (final bytes in fileBytesList) {
-        if (bytes.length > 32) {
+        if (bytes != null && bytes.length > 32) {
           final meta = _parseAudioHeaderMetadata(bytes);
           if (meta.hasBpm && detectedBpm == null) {
             detectedBpm = meta.bpm;
@@ -111,7 +191,9 @@ class BpmKeyDetector {
       }
     }
 
-    // C. Varredura Inteligente nos Nomes dos Arquivos
+    // ----------------------------------------------------
+    // PILAR 4: VARREDURA NOS NOMES DAS PISTAS
+    // ----------------------------------------------------
     for (final name in fileNames) {
       if (detectedBpm == null) {
         final b = _extractBpmFromString(name);
@@ -139,7 +221,9 @@ class BpmKeyDetector {
       }
     }
 
-    // D. Varredura no Título da Música / Pasta
+    // ----------------------------------------------------
+    // PILAR 5: VARREDURA NO TÍTULO DIGITADO
+    // ----------------------------------------------------
     if (songTitle != null && songTitle.isNotEmpty) {
       if (detectedBpm == null) {
         final b = _extractBpmFromString(songTitle);
@@ -159,7 +243,6 @@ class BpmKeyDetector {
         }
       }
 
-      // Tenta extrair artista se estiver no formato "Artista - Música" ou "Música - Artista"
       final parts = songTitle.split(RegExp(r'\s+[-–—]\s+'));
       if (parts.length >= 2) {
         detectedTitle = _cleanTitle(parts[0]);
@@ -167,7 +250,9 @@ class BpmKeyDetector {
       }
     }
 
-    // E. Análise Harmônica das Cifras (se houver chordsText)
+    // ----------------------------------------------------
+    // PILAR 6: ANÁLISE HARMÔNICA DE CIFRAS
+    // ----------------------------------------------------
     if (detectedKey == null && chordsText != null && chordsText.trim().isNotEmpty) {
       final chordKey = _detectKeyFromChordsText(chordsText);
       if (chordKey != null) {
@@ -192,11 +277,9 @@ class BpmKeyDetector {
   // 2. PARSERS DE EXPRESSÃO REGULAR (REGEX)
   // ==========================================
 
-  /// Extrai BPM numérico de strings como "Song - G - 72bpm", "Click_130", "BPM 68", "(95 BPM)"
   static int? _extractBpmFromString(String text) {
     final clean = text.replaceAll('_', ' ').replaceAll('-', ' ');
 
-    // 1. Padrão explícito: "72bpm", "72 bpm", "bpm 72", "bpm: 72"
     final explicitRegex = RegExp(r'\b(?:bpm[\s:]*)?([5-9]\d|1\d\d|2[0-1]\d)(?:[\s]*bpm)?\b', caseSensitive: false);
     for (final match in explicitRegex.allMatches(clean)) {
       final str = match.group(0)?.toLowerCase() ?? '';
@@ -209,7 +292,6 @@ class BpmKeyDetector {
       }
     }
 
-    // 2. Padrão Click: "Click 130", "130 Click"
     final clickRegex = RegExp(r'click[^\d]*(\d{2,3})|(\d{2,3})[^\d]*click', caseSensitive: false);
     final clickMatch = clickRegex.firstMatch(clean);
     if (clickMatch != null) {
@@ -220,7 +302,6 @@ class BpmKeyDetector {
       }
     }
 
-    // 3. Padrão entre parênteses ou colchetes: "(74)" ou "[74]"
     final bracketRegex = RegExp(r'[(\[]\s*(\d{2,3})\s*[)\]]');
     final bracketMatch = bracketRegex.firstMatch(clean);
     if (bracketMatch != null) {
@@ -231,9 +312,7 @@ class BpmKeyDetector {
     return null;
   }
 
-  /// Extrai Tom musical como "G", "Ab", "F#m", "Tom D", "Key: Bb", "Dó Maior"
   static String? _extractKeyFromString(String text) {
-    // 1. Padrão explícito com prefixo "tom", "tom:", "key", "key:"
     final explicitKeyRegex = RegExp(r'\b(?:tom|key)[\s_\-:]*([A-Ga-g][#b]?(?:m|maj|min)?)\b', caseSensitive: false);
     final explicitMatch = explicitKeyRegex.firstMatch(text);
     if (explicitMatch != null) {
@@ -241,12 +320,10 @@ class BpmKeyDetector {
       if (k != null) return k;
     }
 
-    // 2. Padrão isolado entre delimitadores (ex: " - Bb - ", "(G)", "[F#m]", "_D_")
     final isolatedKeyRegex = RegExp(r'(?:^|[_\-\s(\[])([A-Ga-g][#b]?[mM]?)(?:[_\-\s)\]]|$|\.)');
     for (final match in isolatedKeyRegex.allMatches(text)) {
       final cand = match.group(1);
       if (cand != null) {
-        // Evita falsos positivos como letra "A" isolada que seja apenas artigo
         if (cand.toUpperCase() == 'A' && !text.contains('Key') && !text.contains('Tom') && !text.contains('- A -')) {
           continue;
         }
@@ -259,7 +336,6 @@ class BpmKeyDetector {
     return null;
   }
 
-  /// Extrai fórmula de compasso ("4/4", "6/8", "3/4", "12/8")
   static String? _extractTimeSignatureFromString(String text) {
     final sigRegex = RegExp(r'\b(4/4|6/8|3/4|2/4|12/8|2/2)\b');
     final match = sigRegex.firstMatch(text);
@@ -282,7 +358,6 @@ class BpmKeyDetector {
     try {
       if (bytes.length < 44) return null;
 
-      // Verifica se é cabeçalho RIFF WAVE
       final riff = String.fromCharCodes(bytes.sublist(0, 4));
       final wave = String.fromCharCodes(bytes.sublist(8, 12));
       if (riff != 'RIFF' || wave != 'WAVE') return null;
@@ -294,7 +369,6 @@ class BpmKeyDetector {
 
       if (channels < 1 || sampleRate < 8000 || bitsPerSample != 16) return null;
 
-      // Procura bloco 'data'
       int dataOffset = 36;
       while (dataOffset < bytes.length - 8) {
         final chunkId = String.fromCharCodes(bytes.sublist(dataOffset, dataOffset + 4));
@@ -308,11 +382,10 @@ class BpmKeyDetector {
 
       if (dataOffset >= bytes.length) return null;
 
-      // Analisa até 12 segundos de áudio para encontrar picos de metrônomo
       final maxSamples = math.min((bytes.length - dataOffset) ~/ 2, sampleRate * channels * 12);
       final List<int> peakSampleIndices = [];
-      const threshold = 12000; // ~37% do volume máximo em 16-bit PCM (32767)
-      final minSamplesBetweenBeats = (sampleRate * 0.25).toInt(); // Max 240 BPM
+      const threshold = 12000;
+      final minSamplesBetweenBeats = (sampleRate * 0.25).toInt();
 
       int lastPeakIndex = -minSamplesBetweenBeats;
 
@@ -331,12 +404,10 @@ class BpmKeyDetector {
 
       if (peakSampleIndices.length < 4) return null;
 
-      // Calcula a distância entre os picos sucessivos
       final List<double> intervalsInSeconds = [];
       for (int i = 1; i < peakSampleIndices.length; i++) {
         final diffSamples = peakSampleIndices[i] - peakSampleIndices[i - 1];
         final sec = diffSamples / sampleRate;
-        // Intervalos válidos de BPM musical (entre 45 BPM e 220 BPM -> 0.27s a 1.33s)
         if (sec >= 0.26 && sec <= 1.4) {
           intervalsInSeconds.add(sec);
         }
@@ -344,7 +415,6 @@ class BpmKeyDetector {
 
       if (intervalsInSeconds.length < 3) return null;
 
-      // Mediana dos intervalos para ignorar viradas ou ruídos
       intervalsInSeconds.sort();
       final medianInterval = intervalsInSeconds[intervalsInSeconds.length ~/ 2];
 
@@ -352,9 +422,7 @@ class BpmKeyDetector {
       if (calculatedBpm >= 45 && calculatedBpm <= 220) {
         return calculatedBpm;
       }
-    } catch (e) {
-      debugPrint('Erro ao calcular BPM via WAV: $e');
-    }
+    } catch (_) {}
     return null;
   }
 
@@ -362,7 +430,6 @@ class BpmKeyDetector {
     try {
       final file = File(path);
       if (!await file.exists()) return null;
-      // Lê os primeiros 256KB para capturar o cabeçalho e os primeiros cliques
       final raf = await file.open(mode: FileMode.read);
       final headerBytes = await raf.read(256 * 1024);
       await raf.close();
@@ -373,7 +440,142 @@ class BpmKeyDetector {
   }
 
   // ==========================================
-  // 4. PARSER DE METADADOS ID3V2 E MP4/M4A
+  // 4. ANÁLISE DE QUADROS AAC EM ARQUIVOS .M4A
+  // ==========================================
+
+  static int? _detectBpmFromM4aBytes(Uint8List bytes) {
+    try {
+      if (bytes.length < 100) return null;
+
+      // Procura o átomo 'stsz' (Sample Size Atom) que contém o tamanho de cada quadro AAC (1024 amostras = ~23ms)
+      int stszOffset = -1;
+      for (int i = 0; i < bytes.length - 24; i++) {
+        if (bytes[i] == 0x73 &&
+            bytes[i + 1] == 0x74 &&
+            bytes[i + 2] == 0x73 &&
+            bytes[i + 3] == 0x7A) {
+          stszOffset = i;
+          break;
+        }
+      }
+
+      if (stszOffset == -1) return null;
+
+      final byteData = ByteData.sublistView(bytes);
+      final uniformSize = byteData.getUint32(stszOffset + 8, Endian.big);
+      final sampleCount = byteData.getUint32(stszOffset + 12, Endian.big);
+
+      if (uniformSize != 0 || sampleCount < 10) return null;
+
+      // Tenta extrair a taxa de amostragem (timescale) do átomo 'mdhd', padrão 44.1kHz
+      int sampleRate = 44100;
+      for (int i = 0; i < bytes.length - 28; i++) {
+        if (bytes[i] == 0x6D && bytes[i + 1] == 0x64 && bytes[i + 2] == 0x68 && bytes[i + 3] == 0x64) {
+          final version = bytes[i + 4];
+          final tsOffset = version == 1 ? i + 24 : i + 16;
+          if (tsOffset + 4 <= bytes.length) {
+            final ts = byteData.getUint32(tsOffset, Endian.big);
+            if (ts >= 8000 && ts <= 96000) {
+              sampleRate = ts;
+              break;
+            }
+          }
+        }
+      }
+
+      final List<int> frameSizes = [];
+      int offset = stszOffset + 16;
+      final maxSamples = math.min(sampleCount, 2500); // Primeiros ~60 segundos
+
+      for (int i = 0; i < maxSamples; i++) {
+        if (offset + 4 > bytes.length) break;
+        frameSizes.add(byteData.getUint32(offset, Endian.big));
+        offset += 4;
+      }
+
+      if (frameSizes.length < 40) return null;
+
+      final sortedSizes = List<int>.from(frameSizes)..sort();
+      final medianSize = sortedSizes[sortedSizes.length ~/ 2];
+      final spikeThreshold = math.max((medianSize * 2.0).toInt(), 60);
+
+      final List<int> clickFrameIndices = [];
+      const minFramesBetweenClicks = 11; // ~255ms (máximo 235 BPM)
+      int lastClickFrame = -minFramesBetweenClicks;
+
+      for (int i = 0; i < frameSizes.length; i++) {
+        final sz = frameSizes[i];
+        if (sz >= spikeThreshold && (i - lastClickFrame) >= minFramesBetweenClicks) {
+          clickFrameIndices.add(i);
+          lastClickFrame = i;
+        }
+      }
+
+      if (clickFrameIndices.length < 4) return null;
+
+      final List<double> intervalsInSeconds = [];
+      final secondsPerAacFrame = 1024.0 / sampleRate;
+
+      for (int i = 1; i < clickFrameIndices.length; i++) {
+        final diffFrames = clickFrameIndices[i] - clickFrameIndices[i - 1];
+        final sec = diffFrames * secondsPerAacFrame;
+        if (sec >= 0.25 && sec <= 1.5) {
+          intervalsInSeconds.add(sec);
+        }
+      }
+
+      if (intervalsInSeconds.length < 3) return null;
+
+      intervalsInSeconds.sort();
+      final medianInterval = intervalsInSeconds[intervalsInSeconds.length ~/ 2];
+      final bpm = (60.0 / medianInterval).round();
+
+      if (bpm >= 45 && bpm <= 230) {
+        return bpm;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<int?> _detectBpmFromM4aFile(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return null;
+      final len = await file.length();
+      if (len < 100) return null;
+
+      final raf = await file.open(mode: FileMode.read);
+
+      // 1. Tenta nos primeiros 512KB (se o arquivo tiver moov no início / faststart)
+      final headSize = math.min(512 * 1024, len);
+      final headBytes = await raf.read(headSize);
+      int? bpm = _detectBpmFromM4aBytes(headBytes);
+      if (bpm != null) {
+        await raf.close();
+        return bpm;
+      }
+
+      // 2. Se moov estiver no final do arquivo (padrão em exports de DAWs e FFmpeg sem faststart)
+      if (len > headSize) {
+        final tailReadSize = math.min(1024 * 1024, len);
+        await raf.setPosition(len - tailReadSize);
+        final tailBytes = await raf.read(tailReadSize);
+        bpm = _detectBpmFromM4aBytes(tailBytes);
+        if (bpm != null) {
+          await raf.close();
+          return bpm;
+        }
+      }
+
+      await raf.close();
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ==========================================
+  // 5. PARSER DE METADADOS ID3V2 E MP4/M4A
   // ==========================================
 
   static AudioDetectionResult _parseAudioHeaderMetadata(Uint8List bytes) {
@@ -381,24 +583,20 @@ class BpmKeyDetector {
     String? key;
 
     try {
-      // 1. Verifica tag ID3v2 (primeiros 3 bytes = "ID3")
       if (bytes.length > 10 && bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33) {
         final textData = String.fromCharCodes(bytes.sublist(0, math.min(bytes.length, 4096)));
         
-        // TBPM frame
         final bpmMatch = RegExp(r'TBPM[^\w]*(\d{2,3})', caseSensitive: false).firstMatch(textData);
         if (bpmMatch != null) {
           bpm = int.tryParse(bpmMatch.group(1) ?? '');
         }
 
-        // TKEY frame
         final keyMatch = RegExp(r'TKEY[^\w]*([A-Ga-g][#b]?[mM]?)', caseSensitive: false).firstMatch(textData);
         if (keyMatch != null) {
           key = keyMatch.group(1);
         }
       }
 
-      // 2. Verifica MP4/M4A (atom "tmpo" para BPM)
       if (bytes.length > 64) {
         final textData = String.fromCharCodes(bytes.sublist(0, math.min(bytes.length, 4096)));
         final tmpoIdx = textData.indexOf('tmpo');
@@ -420,12 +618,11 @@ class BpmKeyDetector {
   }
 
   // ==========================================
-  // 5. ANÁLISE HARMÔNICA DE CIFRAS (CHORDS)
+  // 6. ANÁLISE HARMÔNICA DE CIFRAS (CHORDS)
   // ==========================================
 
   static String? _detectKeyFromChordsText(String chordsText) {
     try {
-      // Extrai acordes como G, D/F#, Em7, C9, Bb, etc.
       final chordRegex = RegExp(r'\b([A-G][#b]?(?:m|maj|min|dim|aug|sus\d?)?\d?(?:/[A-G][#b]?)?)\b');
       final matches = chordRegex.allMatches(chordsText);
       if (matches.isEmpty) return null;
@@ -445,7 +642,6 @@ class BpmKeyDetector {
 
       if (rootCount.isEmpty) return null;
 
-      // O primeiro acorde ou o acorde mais frequente em 90% das músicas de adoração indica o Tom
       String mostFrequent = rootCount.entries.first.key;
       int maxFreq = 0;
       for (final e in rootCount.entries) {
@@ -455,7 +651,6 @@ class BpmKeyDetector {
         }
       }
 
-      // Se o primeiro acorde tiver relevância expressiva, ele tem altíssima chance de ser a tônica
       if (firstChordRoot != null && (rootCount[firstChordRoot] ?? 0) >= (maxFreq * 0.6)) {
         return firstChordRoot;
       }
@@ -467,7 +662,7 @@ class BpmKeyDetector {
   }
 
   // ==========================================
-  // 6. UTILITÁRIOS E NORMALIZAÇÃO
+  // 7. UTILITÁRIOS E NORMALIZAÇÃO
   // ==========================================
 
   static bool _isValidKey(String k) {
@@ -478,7 +673,6 @@ class BpmKeyDetector {
   static String? _normalizeKey(String? raw) {
     if (raw == null || raw.trim().isEmpty) return null;
     var k = raw.trim();
-    // Ex: "g" -> "G", "bb" -> "Bb", "c#" -> "C#"
     if (k.length == 1) {
       k = k.toUpperCase();
     } else if (k.length >= 2) {
@@ -487,10 +681,9 @@ class BpmKeyDetector {
       k = '$first$rest';
     }
 
-    // Normaliza variações menores
     if (k.endsWith('m') || k.endsWith('min')) {
       final base = k.replaceAll('min', '').replaceAll('m', '');
-      return base; // RealTracks trabalha com o Tom Maior equivalente ou transposição padrão
+      return base;
     }
 
     return standardKeys.firstWhere(
@@ -501,6 +694,20 @@ class BpmKeyDetector {
 
   /// Executa auto-detecção em uma música existente do Acervo e atualiza Tom e BPM
   static Future<AudioDetectionResult> autoDetectForExistingSong(Song song) async {
+    // 1. Tenta catálogo primeiro
+    final catalogMatch = WorshipCatalog.lookup(song.title);
+    if (catalogMatch != null) {
+      return AudioDetectionResult(
+        bpm: catalogMatch.bpm,
+        key: catalogMatch.key,
+        timeSignature: catalogMatch.timeSignature,
+        detectedTitle: catalogMatch.title,
+        detectedArtist: catalogMatch.artist,
+        confidence: 0.99,
+        source: 'Catálogo de Louvor (${catalogMatch.artist})',
+      );
+    }
+
     final fileNames = song.stems.map((s) => s.name).toList();
     final filePaths = song.stems.map((s) => s.filePath ?? '').toList();
 

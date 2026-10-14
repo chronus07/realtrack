@@ -7,6 +7,7 @@ import '../models/stem_track.dart';
 import '../services/audio_engine.dart';
 import '../services/bpm_key_detector.dart';
 import '../services/supabase_service.dart';
+import '../services/worship_catalog.dart';
 import '../theme/app_theme.dart';
 
 class UploadScreen extends StatefulWidget {
@@ -39,6 +40,46 @@ class _UploadScreenState extends State<UploadScreen> {
 
   final List<String> _timeSignatures = ['4/4', '6/8', '3/4', '2/4', '12/8'];
 
+  void _onTitleChanged(String text) {
+    if (text.trim().length >= 3) {
+      final match = WorshipCatalog.lookup(text);
+      if (match != null) {
+        setState(() {
+          _bpmController.text = match.bpm.toString();
+          if (_musicalKeys.contains(match.key)) {
+            _selectedKey = match.key;
+          }
+          if (_timeSignatures.contains(match.timeSignature)) {
+            _selectedTimeSignature = match.timeSignature;
+          }
+          if (_artistController.text.trim().isEmpty) {
+            _artistController.text = match.artist;
+          }
+        });
+
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.auto_awesome, color: AppTheme.amberCue, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '⚡ Reconhecido: ${match.title} (${match.artist}) • Tom ${match.key} • ${match.bpm} BPM',
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: const Color(0xFF1F2937),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _pickAudioFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: _isMultiTrack,
@@ -52,10 +93,12 @@ class _UploadScreenState extends State<UploadScreen> {
           final fileNameLower = file.name.toLowerCase();
           final isCue = fileNameLower.contains('click') ||
               fileNameLower.contains('metronomo') ||
+              fileNameLower.contains('metronome') ||
               fileNameLower.contains('guia') ||
               fileNameLower.contains('guide') ||
               fileNameLower.contains('cue') ||
-              fileNameLower.contains('count');
+              fileNameLower.contains('count') ||
+              fileNameLower.contains('tempo');
 
           // Evita duplicatas pelo nome
           if (!_selectedStems.any((s) => s.file.name == file.name)) {
@@ -92,12 +135,12 @@ class _UploadScreenState extends State<UploadScreen> {
 
     final fileNames = _selectedStems.map((s) => s.file.name).toList();
     final filePaths = _selectedStems.map((s) => s.file.path ?? '').toList();
-    final fileBytesList = _selectedStems.map((s) => s.file.bytes).whereType<Uint8List>().toList();
+    final fileBytesList = _selectedStems.map((s) => s.file.bytes).toList();
 
     final result = await BpmKeyDetector.detectFromStemsAndMetadata(
       fileNames: fileNames,
       filePaths: filePaths,
-      fileBytesList: fileBytesList.isNotEmpty ? fileBytesList : null,
+      fileBytesList: fileBytesList.any((b) => b != null) ? fileBytesList : null,
       songTitle: _titleController.text,
       chordsText: _chordsController.text,
     );
@@ -333,9 +376,12 @@ class _UploadScreenState extends State<UploadScreen> {
               // Título e Artista
               TextField(
                 controller: _titleController,
+                onChanged: _onTitleChanged,
                 decoration: InputDecoration(
                   labelText: 'Título da Música *',
-                  hintText: 'Ex: Há Um Rio',
+                  hintText: 'Ex: Há Um Rio ou Me Atraiu',
+                  helperText: '⚡ O app reconhece Tom e BPM de louvores conhecidos automaticamente',
+                  helperStyle: const TextStyle(fontSize: 10, color: AppTheme.amberCue),
                   filled: true,
                   fillColor: AppTheme.card,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
