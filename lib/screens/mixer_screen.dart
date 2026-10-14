@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/stem_track.dart';
+import '../services/audio_cache_service.dart';
 import '../services/audio_engine.dart';
 import '../theme/app_theme.dart';
 import '../widgets/pitch_control_bar.dart';
@@ -100,6 +102,73 @@ class MixerScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          // Botão Baixar Música / Status de Cache no Celular
+          if (!kIsWeb)
+            FutureBuilder<bool>(
+              future: AudioCacheService.isSongFullyCached(song),
+              builder: (context, snapshot) {
+                final isCached = snapshot.data ?? false;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: GestureDetector(
+                    onTap: () async {
+                      if (isCached) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('✅ Todas as pistas de "${song.title}" já estão 100% salvas no celular.'),
+                            backgroundColor: AppTheme.emeraldSafe,
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                      } else {
+                        await engine.downloadCurrentSongToDevice();
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('✅ Pistas de "${song.title}" baixadas com sucesso no aparelho!'),
+                              backgroundColor: AppTheme.emeraldSafe,
+                              duration: const Duration(seconds: 3),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isCached
+                            ? AppTheme.emeraldSafe.withOpacity(0.18)
+                            : AppTheme.amberCue.withOpacity(0.18),
+                        border: Border.all(
+                          color: isCached ? AppTheme.emeraldSafe : AppTheme.amberCue,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isCached ? Icons.offline_pin : Icons.download_for_offline,
+                            size: 14,
+                            color: isCached ? AppTheme.emeraldSafe : AppTheme.amberCue,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isCached ? 'No Aparelho' : 'Baixar Pistas',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: isCached ? AppTheme.emeraldSafe : AppTheme.amberCue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+
           // Botão seletor rápido de Cabo Y (Palco) vs Estéreo (Ensaio) - 1 Toque Direto
           Padding(
             padding: const EdgeInsets.only(right: 8),

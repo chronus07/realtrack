@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/song.dart';
+import '../services/audio_cache_service.dart';
 import '../services/audio_engine.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
@@ -353,6 +355,49 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                           ),
                                         ),
                                       ),
+                                      if (!kIsWeb)
+                                        FutureBuilder<bool>(
+                                          future: AudioCacheService.isSongFullyCached(song),
+                                          builder: (context, snapshot) {
+                                            final isCached = snapshot.data ?? false;
+                                            return IconButton(
+                                              icon: Icon(
+                                                isCached ? Icons.offline_pin : Icons.download_for_offline_outlined,
+                                                color: isCached ? AppTheme.emeraldSafe : Colors.white38,
+                                                size: 20,
+                                              ),
+                                              tooltip: isCached ? 'Salva no aparelho' : 'Baixar faixas no aparelho',
+                                              onPressed: () async {
+                                                if (isCached) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('✅ Todas as pistas de "${song.title}" já estão no celular.'),
+                                                      backgroundColor: AppTheme.emeraldSafe,
+                                                      duration: const Duration(seconds: 2),
+                                                    ),
+                                                  );
+                                                } else {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('Baixando "${song.title}" para o aparelho...'),
+                                                      duration: const Duration(seconds: 1),
+                                                    ),
+                                                  );
+                                                  await AudioCacheService.downloadSong(song);
+                                                  if (context.mounted) {
+                                                    setState(() {});
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      SnackBar(
+                                                        content: Text('✅ "${song.title}" salva no aparelho com sucesso!'),
+                                                        backgroundColor: AppTheme.emeraldSafe,
+                                                      ),
+                                                    );
+                                                  }
+                                                }
+                                              },
+                                            );
+                                          },
+                                        ),
                                       IconButton(
                                         icon: Icon(
                                           isInCurrentSetlist ? Icons.check_circle : Icons.playlist_add,

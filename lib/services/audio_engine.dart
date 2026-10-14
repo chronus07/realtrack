@@ -294,7 +294,7 @@ class AudioEngine extends ChangeNotifier {
     }
     notifyListeners();
     await SupabaseService.deleteSongFromLibrary(songId);
-    await AudioCacheService.cleanOrphanedCache(_allSetlists);
+    await AudioCacheService.cleanOrphanedCache(_allSetlists, _masterLibrary);
   }
 
   // ==========================================
@@ -370,7 +370,7 @@ class AudioEngine extends ChangeNotifier {
     notifyListeners();
 
     SupabaseService.deleteSetlistFromCloud(id);
-    AudioCacheService.cleanOrphanedCache(_allSetlists);
+    AudioCacheService.cleanOrphanedCache(_allSetlists, _masterLibrary);
   }
 
   void addSongToSetlist(String setlistId, Song song) {
@@ -412,7 +412,7 @@ class AudioEngine extends ChangeNotifier {
       }
       notifyListeners();
       SupabaseService.saveSetlistToCloud(_currentSetlist!);
-      AudioCacheService.cleanOrphanedCache(_allSetlists);
+      AudioCacheService.cleanOrphanedCache(_allSetlists, _masterLibrary);
     }
   }
 
@@ -468,18 +468,70 @@ class AudioEngine extends ChangeNotifier {
     _lastStemSeekTimes.clear();
   }
 
-  void togglePlay() {
+  Future<void> togglePlay() async {
     if (currentSong == null) return;
     if (_isPlaying) {
-      _pausePlayback();
+      await _pausePlayback();
     } else {
-      _startPlayback();
+      // Se as pistas já estão carregadas e apenas pausadas, retoma instantaneamente sem re-baixar!
+      if (_stemPlayers.isNotEmpty) {
+        await _resumePlayback();
+      } else {
+        await _startPlayback();
+      }
+    }
+  }
+
+  Future<void> _resumePlayback() async {
+    if (_stemPlayers.isEmpty) {
+      await _startPlayback();
+      return;
+    }
+
+    _isPlaying = true;
+    _isLoadingAudio = false;
+    WakelockPlus.enable();
+
+    // Dispara todos os players simultaneamente sem await sequencial
+    for (final player in _stemPlayers.values) {
+      player.resume();
+    }
+
+    _startPlaybackClock();
+    _startDriftCompensation();
+    notifyListeners();
+  }
+
+  Future<void> downloadCurrentSongToDevice({void Function(int done, int total, double pct)? onProgress}) async {
+    final song = currentSong;
+    if (song == null || kIsWeb) return;
+    _isLoadingAudio = true;
+    _loadingStatus = 'Baixando faixas de "${song.title}" para o aparelho...';
+    _loadingProgress = 0.05;
+    notifyListeners();
+
+    try {
+      await AudioCacheService.downloadSong(
+        song,
+        onProgress: (done, total, pct) {
+          _loadingStatus = 'Salvando no aparelho: $done/$total faixas (${(pct * 100).toInt()}%)...';
+          _loadingProgress = pct;
+          onProgress?.call(done, total, pct);
+          notifyListeners();
+        },
+      );
+    } catch (e) {
+      debugPrint('Erro no download da música: $e');
+    } finally {
+      _isLoadingAudio = false;
+      notifyListeners();
     }
   }
 
   Future<void> _startPlayback() async {
     final song = currentSong;
     if (song == null) return;
+    if (_isLoadingAudio) return;
 
     _isLoadingAudio = true;
     _isPlaying = true;
@@ -616,33 +668,26 @@ class AudioEngine extends ChangeNotifier {
         // Fallback simulador se não houver áudios válidos
         _startPlaybackClock();
       } else {
-        // Posiciona todas as pistas exatamente na mesma marcação de tempo
-        final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
-        final seekFutures = _stemPlayers.values.map((p) async {
-          try {
-            await p.seek(seekPos);
-          } catch (_) {}
-        });
-        await Future.wait(seekFutures);
+        // Se houver posição já definida (ex: seek antes do play), sincroniza
+        if (_currentPositionSeconds > 0.08) {
+          final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
+          final seekFutures = _stemPlayers.values.map((p) => p.seek(seekPos));
+          await Future.wait(seekFutures);
+          await Future.delayed(const Duration(milliseconds: 30));
+        }
 
-        // DISPARO SIMULTÂNEO NATIVO
-        final resumeFutures = _stemPlayers.values.map((p) async {
-          try {
-            await p.resume();
-          } catch (e) {
-            debugPrint('Erro ao iniciar player: $e');
-          }
-        });
-        await Future.wait(resumeFutures);
+        // DISPARO SIMULTÂNEO NATIVO (Disparo direto em loop rápido)
+        for (final p in _stemPlayers.values) {
+          p.resume();
+        }
 
         // CRUCIAL: Após início no hardware do Android/iOS, reaplica volume e balanço (PAN)
-        // em todas as pistas para garantir que o roteamento L/R do Cabo Y não seja resetado pelo SO!
         await _applyAllStemsAudioSettings();
 
         // Inicia relógio de reprodução com watchdog de avanço
         _startPlaybackClock();
 
-        // Inicia o monitor de alinhamento em tempo real (tolerância de 80ms)
+        // Inicia o monitor de alinhamento em tempo real (tolerância de 60ms direto contra o Master/Click)
         _startDriftCompensation();
 
         // Em segundo plano, baixa as outras músicas da playlist para ficarem 100% offline
@@ -668,32 +713,45 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = (totalBeats % 4) + 1;
   }
 
-  /// Watchdog de alinhamento em tempo real: verifica a cada 1.0s se alguma pista divergiu mais de 80ms
+  /// Watchdog de alinhamento em tempo real: compara a cada 500ms cada instrumento contra o Click (Master)
   void _startDriftCompensation() {
     _driftCheckTimer?.cancel();
-    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) async {
+    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
       if (!_isPlaying || _stemPlayers.isEmpty) return;
+
+      final masterPlayer = _stemPlayers[_masterStemId];
+      if (masterPlayer == null) return;
+
+      int? masterMillis;
+      try {
+        final pos = await masterPlayer.getCurrentPosition();
+        if (pos != null) {
+          masterMillis = pos.inMilliseconds;
+        }
+      } catch (_) {}
+
+      if (masterMillis == null || masterMillis < 50) return;
 
       final now = DateTime.now().millisecondsSinceEpoch;
 
       for (final entry in _stemPlayers.entries) {
         if (entry.key == _masterStemId) continue;
 
-        // Evita reajustar a mesma pista em menos de 1.5s
+        // Evita reajustar a mesma pista em menos de 1000ms
         final lastSeek = _lastStemSeekTimes[entry.key] ?? 0;
-        if (now - lastSeek < 1500) continue;
+        if (now - lastSeek < 1000) continue;
 
         final player = entry.value;
 
         try {
           final pos = await player.getCurrentPosition();
           if (pos != null) {
-            final trackSec = pos.inMilliseconds / 1000.0;
-            final diff = (trackSec - _currentPositionSeconds).abs();
-            // Se a defasagem for perceptível (> 80ms), realinha imediatamente com o Click/Master
-            if (diff > 0.080) {
+            final trackMillis = pos.inMilliseconds;
+            final diff = (trackMillis - masterMillis).abs();
+            // Se a defasagem for perceptível (> 60ms), realinha imediatamente com o Click/Master
+            if (diff > 60) {
               _lastStemSeekTimes[entry.key] = now;
-              await player.seek(Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()));
+              player.seek(Duration(milliseconds: masterMillis));
             }
           }
         } catch (_) {}

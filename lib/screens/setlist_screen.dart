@@ -922,16 +922,46 @@ class _SetlistScreenState extends State<SetlistScreen> {
                                           future: AudioCacheService.isSongFullyCached(song),
                                           builder: (context, snapshot) {
                                             final isCached = snapshot.data ?? false;
-                                            return Tooltip(
-                                              message: isCached
-                                                  ? 'Salva no aparelho (Zero Latência)'
-                                                  : 'Na nuvem (baixa ao tocar ou pelo botão acima)',
-                                              child: Padding(
-                                                padding: const EdgeInsets.only(left: 4),
-                                                child: Icon(
-                                                  isCached ? Icons.offline_pin : Icons.cloud_outlined,
-                                                  size: 16,
-                                                  color: isCached ? AppTheme.emeraldSafe : Colors.white38,
+                                            return GestureDetector(
+                                              onTap: () async {
+                                                if (isCached) {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('✅ As pistas de "${song.title}" já estão no celular.'),
+                                                      backgroundColor: AppTheme.emeraldSafe,
+                                                      duration: const Duration(seconds: 2),
+                                                    ),
+                                                  );
+                                                } else {
+                                                  ScaffoldMessenger.of(context).showSnackBar(
+                                                    SnackBar(
+                                                      content: Text('Baixando "${song.title}" para o aparelho...'),
+                                                      duration: const Duration(seconds: 1),
+                                                    ),
+                                                  );
+                                                  await AudioCacheService.downloadSong(song);
+                                                  if (context.mounted) {
+                                                    setState(() {});
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      SnackBar(
+                                                        content: Text('✅ "${song.title}" salva no aparelho com sucesso!'),
+                                                        backgroundColor: AppTheme.emeraldSafe,
+                                                      ),
+                                                    );
+                                                  }
+                                                }
+                                              },
+                                              child: Tooltip(
+                                                message: isCached
+                                                    ? 'Salva no aparelho (Zero Latência)'
+                                                    : 'Toque para baixar esta música no celular',
+                                                child: Padding(
+                                                  padding: const EdgeInsets.only(left: 4),
+                                                  child: Icon(
+                                                    isCached ? Icons.offline_pin : Icons.download_for_offline_outlined,
+                                                    size: 18,
+                                                    color: isCached ? AppTheme.emeraldSafe : Colors.white38,
+                                                  ),
                                                 ),
                                               ),
                                             );
