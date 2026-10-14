@@ -1,9 +1,11 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../services/audio_engine.dart';
+import '../services/bpm_key_detector.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
@@ -70,6 +72,74 @@ class _UploadScreenState extends State<UploadScreen> {
           _isMultiTrack = true;
         }
       });
+
+      // Auto-detecta Tom, BPM, título e artista imediatamente após a seleção dos arquivos
+      _autoDetectFromSelectedFiles();
+    }
+  }
+
+  Future<void> _autoDetectFromSelectedFiles() async {
+    if (_selectedStems.isEmpty && _titleController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Selecione os áudios ou informe o título para auto-detectar Tom e BPM.'),
+          backgroundColor: AppTheme.amberCue,
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final fileNames = _selectedStems.map((s) => s.file.name).toList();
+    final filePaths = _selectedStems.map((s) => s.file.path ?? '').toList();
+    final fileBytesList = _selectedStems.map((s) => s.file.bytes).whereType<Uint8List>().toList();
+
+    final result = await BpmKeyDetector.detectFromStemsAndMetadata(
+      fileNames: fileNames,
+      filePaths: filePaths,
+      fileBytesList: fileBytesList.isNotEmpty ? fileBytesList : null,
+      songTitle: _titleController.text,
+      chordsText: _chordsController.text,
+    );
+
+    if (result.hasAny && mounted) {
+      setState(() {
+        if (result.hasBpm) {
+          _bpmController.text = result.bpm.toString();
+        }
+        if (result.hasKey && _musicalKeys.contains(result.key)) {
+          _selectedKey = result.key!;
+        }
+        if (result.timeSignature != null && _timeSignatures.contains(result.timeSignature)) {
+          _selectedTimeSignature = result.timeSignature!;
+        }
+        if (_titleController.text.isEmpty && result.detectedTitle != null && result.detectedTitle!.isNotEmpty) {
+          _titleController.text = result.detectedTitle!;
+        }
+        if (_artistController.text.isEmpty && result.detectedArtist != null && result.detectedArtist!.isNotEmpty) {
+          _artistController.text = result.detectedArtist!;
+        }
+      });
+
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.auto_awesome, color: AppTheme.amberCue, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '⚡ Detectado: Tom ${result.key ?? _selectedKey} • ${result.bpm ?? _bpmController.text} BPM (${result.source})',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: const Color(0xFF1F2937),
+          duration: const Duration(seconds: 4),
+        ),
+      );
     }
   }
 
@@ -284,6 +354,41 @@ class _UploadScreenState extends State<UploadScreen> {
                 ),
               ),
               const SizedBox(height: 12),
+
+              // Tom, BPM e Compasso com Botão de Auto-Detecção
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Tom, BPM e Compasso', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  GestureDetector(
+                    onTap: _autoDetectFromSelectedFiles,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amberCue.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppTheme.amberCue.withOpacity(0.5)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          Icon(Icons.auto_awesome, size: 13, color: AppTheme.amberCue),
+                          SizedBox(width: 4),
+                          Text(
+                            'Auto-Detectar',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.amberCue,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
 
               // Tom, BPM e Compasso
               Row(

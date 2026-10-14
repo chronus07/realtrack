@@ -416,4 +416,20 @@ class SupabaseService {
       _isSavingCloud = false;
     }
   }
+
+  /// Atualiza o Tom e/ou BPM de uma música no Acervo (banco de dados Supabase)
+  static Future<bool> updateSongKeyAndBpm(String songId, {String? key, int? bpm}) async {
+    if (!AppConfig.isConfigured || !isValidUuid(songId)) return false;
+    try {
+      final Map<String, dynamic> updates = {};
+      if (key != null) updates['original_key'] = key;
+      if (bpm != null) updates['bpm'] = bpm;
+      if (updates.isEmpty) return true;
+      await client.from('songs').update(updates).eq('id', songId);
+      return true;
+    } catch (e) {
+      debugPrint('Erro ao atualizar Tom/BPM no Supabase: $e');
+      return false;
+    }
+  }
 }

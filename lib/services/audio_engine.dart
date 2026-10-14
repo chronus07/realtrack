@@ -284,6 +284,56 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  Future<void> updateLibrarySongKeyAndBpm(String songId, {String? key, int? bpm}) async {
+    final idx = _masterLibrary.indexWhere((s) => s.id == songId);
+    if (idx != -1) {
+      final old = _masterLibrary[idx];
+      final newKey = key ?? old.originalKey;
+      final newBpm = bpm ?? old.bpm;
+      final updated = Song(
+        id: old.id,
+        title: old.title,
+        artist: old.artist,
+        originalKey: newKey,
+        currentKey: newKey,
+        pitchOffsetSemitones: old.pitchOffsetSemitones,
+        bpm: newBpm,
+        timeSignature: old.timeSignature,
+        isMultiTrack: old.isMultiTrack,
+        stems: old.stems,
+        sections: old.sections,
+        chordsText: old.chordsText,
+        isDownloaded: old.isDownloaded,
+      );
+      _masterLibrary[idx] = updated;
+
+      for (final setlist in _allSetlists) {
+        for (int i = 0; i < setlist.songs.length; i++) {
+          if (setlist.songs[i].id == songId) {
+            final sOld = setlist.songs[i];
+            setlist.songs[i] = Song(
+              id: sOld.id,
+              title: sOld.title,
+              artist: sOld.artist,
+              originalKey: newKey,
+              currentKey: sOld.pitchOffsetSemitones == 0 ? newKey : sOld.currentKey,
+              pitchOffsetSemitones: sOld.pitchOffsetSemitones,
+              bpm: newBpm,
+              timeSignature: sOld.timeSignature,
+              isMultiTrack: sOld.isMultiTrack,
+              stems: sOld.stems,
+              sections: sOld.sections,
+              chordsText: sOld.chordsText,
+              isDownloaded: sOld.isDownloaded,
+            );
+          }
+        }
+      }
+      notifyListeners();
+      await SupabaseService.updateSongKeyAndBpm(songId, key: key, bpm: bpm);
+    }
+  }
+
   Future<void> removeSongFromLibrary(String songId) async {
     _masterLibrary.removeWhere((s) => s.id == songId);
     for (final setlist in _allSetlists) {

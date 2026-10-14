@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/song.dart';
 import '../services/audio_cache_service.dart';
 import '../services/audio_engine.dart';
+import '../services/bpm_key_detector.dart';
 import '../services/supabase_service.dart';
 import '../theme/app_theme.dart';
 
@@ -38,6 +39,247 @@ class _LibraryScreenState extends State<LibraryScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showAutoDetectDialog(Song song) {
+    String selectedKey = song.originalKey;
+    final bpmController = TextEditingController(text: song.bpm.toString());
+    bool isAnalyzing = false;
+    String statusMessage = 'Clique abaixo para escanear as faixas de áudio e metadados.';
+    String? detectedSource;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: AppTheme.card,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: const [
+                Icon(Icons.auto_awesome, color: AppTheme.amberCue, size: 22),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Auto-Detectar Tom & BPM',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    song.title,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  Text(
+                    '${song.artist} • ${song.stems.length} pista(s)',
+                    style: const TextStyle(fontSize: 11, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Feedback / Status da Análise
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.cardBorder.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: detectedSource != null ? AppTheme.amberCue.withOpacity(0.5) : Colors.white12,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        if (isAnalyzing) ...[
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.amberCue),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        Expanded(
+                          child: Text(
+                            statusMessage,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: detectedSource != null ? AppTheme.amberCue : Colors.white70,
+                              fontWeight: detectedSource != null ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Campos de Tom e BPM (confirmáveis ou ajustáveis)
+                  Row(
+                    children: [
+                      // Tom
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Tom Original', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1F2937),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppTheme.cardBorder),
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String>(
+                                  value: BpmKeyDetector.standardKeys.contains(selectedKey) ? selectedKey : 'G',
+                                  isExpanded: true,
+                                  dropdownColor: const Color(0xFF1F2937),
+                                  items: BpmKeyDetector.standardKeys.map((k) {
+                                    return DropdownMenuItem(
+                                      value: k,
+                                      child: Text(k, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                    );
+                                  }).toList(),
+                                  onChanged: (val) {
+                                    if (val != null) {
+                                      setDialogState(() => selectedKey = val);
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+
+                      // BPM
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('BPM', style: TextStyle(fontSize: 11, color: Colors.white70)),
+                            const SizedBox(height: 4),
+                            TextField(
+                              controller: bpmController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                filled: true,
+                                fillColor: const Color(0xFF1F2937),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(color: AppTheme.cardBorder),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Botão para disparar análise das faixas
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppTheme.amberCue,
+                        side: const BorderSide(color: AppTheme.amberCue),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.radar, size: 16),
+                      label: Text(
+                        isAnalyzing ? 'Analisando faixas...' : 'Escanear Faixas Agora',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: isAnalyzing
+                          ? null
+                          : () async {
+                              setDialogState(() {
+                                isAnalyzing = true;
+                                statusMessage = 'Lendo faixas de áudio e analisando transientes de click...';
+                              });
+
+                              try {
+                                final result = await BpmKeyDetector.autoDetectForExistingSong(song);
+                                setDialogState(() {
+                                  isAnalyzing = false;
+                                  if (result.hasAny) {
+                                    if (result.hasKey && BpmKeyDetector.standardKeys.contains(result.key)) {
+                                      selectedKey = result.key!;
+                                    }
+                                    if (result.hasBpm) {
+                                      bpmController.text = result.bpm.toString();
+                                    }
+                                    detectedSource = result.source;
+                                    statusMessage = '✅ Detectado: Tom ${result.key ?? selectedKey} • ${result.bpm ?? bpmController.text} BPM (${result.source})';
+                                  } else {
+                                    statusMessage = 'Não foram encontrados metadados claros nas faixas. Ajuste manualmente acima.';
+                                  }
+                                });
+                              } catch (e) {
+                                setDialogState(() {
+                                  isAnalyzing = false;
+                                  statusMessage = 'Erro na análise: $e';
+                                });
+                              }
+                            },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.amberCue,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () async {
+                  final newBpm = int.tryParse(bpmController.text.trim()) ?? song.bpm;
+                  Navigator.pop(ctx);
+
+                  final engine = context.read<AudioEngine>();
+                  await engine.updateLibrarySongKeyAndBpm(
+                    song.id,
+                    key: selectedKey,
+                    bpm: newBpm,
+                  );
+
+                  if (mounted) {
+                    setState(() {});
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('✅ "${song.title}" atualizada: Tom $selectedKey • $newBpm BPM!'),
+                        backgroundColor: AppTheme.emeraldSafe,
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Salvar no Acervo', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   void _confirmDeleteSong(Song song) {
@@ -398,6 +640,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                             );
                                           },
                                         ),
+                                      IconButton(
+                                        icon: const Icon(Icons.auto_awesome, size: 18, color: AppTheme.amberCue),
+                                        tooltip: 'Auto-detectar Tom & BPM',
+                                        onPressed: () => _showAutoDetectDialog(song),
+                                      ),
                                       IconButton(
                                         icon: Icon(
                                           isInCurrentSetlist ? Icons.check_circle : Icons.playlist_add,

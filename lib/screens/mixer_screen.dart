@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/stem_track.dart';
 import '../services/audio_cache_service.dart';
 import '../services/audio_engine.dart';
+import '../services/bpm_key_detector.dart';
 import '../theme/app_theme.dart';
 import '../widgets/pitch_control_bar.dart';
 import '../widgets/section_markers.dart';
@@ -87,9 +88,61 @@ class MixerScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  '${song.bpm} BPM • ${song.timeSignature} • ${song.stems.length} Pistas',
-                  style: const TextStyle(fontSize: 10, color: Colors.white54),
+                GestureDetector(
+                  onTap: () async {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Row(
+                          children: [
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.amberCue),
+                            ),
+                            const SizedBox(width: 8),
+                            Text('⚡ Analisando faixas de "${song.title}"...'),
+                          ],
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+
+                    final result = await BpmKeyDetector.autoDetectForExistingSong(song);
+                    if (result.hasAny && context.mounted) {
+                      await engine.updateLibrarySongKeyAndBpm(
+                        song.id,
+                        key: result.key,
+                        bpm: result.bpm,
+                      );
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('✅ Auto-detectado: Tom ${result.key ?? song.originalKey} • ${result.bpm ?? song.bpm} BPM (${result.source})'),
+                          backgroundColor: AppTheme.emeraldSafe,
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    } else if (context.mounted) {
+                      ScaffoldMessenger.of(context).clearSnackBars();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Não foi possível identificar metadados adicionais para esta música.'),
+                          backgroundColor: AppTheme.amberCue,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                  child: Row(
+                    children: [
+                      Text(
+                        '${song.bpm} BPM • ${song.timeSignature} • ${song.stems.length} Pistas',
+                        style: const TextStyle(fontSize: 10, color: Colors.white54),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.auto_awesome, size: 10, color: AppTheme.amberCue),
+                    ],
+                  ),
                 ),
               ],
             ),
