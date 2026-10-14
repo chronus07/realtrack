@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java (JDK 17)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -37,7 +37,12 @@ jobs:
         run: flutter pub get
 
       - name: Build Android Release APK
-        run: flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation
+        run: |
+          flutter build apk --release --no-tree-shake-icons --android-skip-build-dependency-validation || {
+            echo "=== BUILD FAILED, CHECKING GRADLE LOGS ==="
+            find build -name "*.log" -exec cat {} + 2>/dev/null || true
+            exit 1
+          }
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
