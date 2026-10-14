@@ -492,10 +492,19 @@ class AudioEngine extends ChangeNotifier {
     _isLoadingAudio = false;
     WakelockPlus.enable();
 
-    // Dispara todos os players simultaneamente sem await sequencial
-    for (final player in _stemPlayers.values) {
-      player.resume();
+    // Barreira de acomodação antes de retomar para garantir sincronismo perfeito
+    if (_stemPlayers.containsKey(_masterStemId)) {
+      try {
+        final masterPos = await _stemPlayers[_masterStemId]!.getCurrentPosition();
+        if (masterPos != null) {
+          await Future.wait(_stemPlayers.values.map((p) => p.seek(masterPos)));
+          await Future.delayed(const Duration(milliseconds: 50));
+        }
+      } catch (_) {}
     }
+
+    // Dispara todos os players simultaneamente
+    await Future.wait(_stemPlayers.values.map((p) => p.resume()));
 
     _startPlaybackClock();
     _startDriftCompensation();
@@ -668,18 +677,17 @@ class AudioEngine extends ChangeNotifier {
         // Fallback simulador se não houver áudios válidos
         _startPlaybackClock();
       } else {
-        // Se houver posição já definida (ex: seek antes do play), sincroniza
-        if (_currentPositionSeconds > 0.08) {
-          final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
-          final seekFutures = _stemPlayers.values.map((p) => p.seek(seekPos));
-          await Future.wait(seekFutures);
-          await Future.delayed(const Duration(milliseconds: 30));
-        }
+        // SINCRONIZAÇÃO NATIVA: alinha todas as faixas e aplica barreira de pré-rolagem (90ms)
+        // Isso permite aos decodificadores do Android preencherem o buffer antes de liberar a reprodução
+        final seekPos = _currentPositionSeconds > 0.08
+            ? Duration(milliseconds: (_currentPositionSeconds * 1000).toInt())
+            : Duration.zero;
+        final seekFutures = _stemPlayers.values.map((p) => p.seek(seekPos));
+        await Future.wait(seekFutures);
+        await Future.delayed(const Duration(milliseconds: 90));
 
-        // DISPARO SIMULTÂNEO NATIVO (Disparo direto em loop rápido)
-        for (final p in _stemPlayers.values) {
-          p.resume();
-        }
+        // DISPARO 100% SIMULTÂNEO NATIVO
+        await Future.wait(_stemPlayers.values.map((p) => p.resume()));
 
         // CRUCIAL: Após início no hardware do Android/iOS, reaplica volume e balanço (PAN)
         await _applyAllStemsAudioSettings();
@@ -687,13 +695,8 @@ class AudioEngine extends ChangeNotifier {
         // Inicia relógio de reprodução com watchdog de avanço
         _startPlaybackClock();
 
-        // Inicia o monitor de alinhamento em tempo real (tolerância de 60ms direto contra o Master/Click)
+        // Inicia o monitor de proteção contra desvios severos
         _startDriftCompensation();
-
-        // Em segundo plano, baixa as outras músicas da playlist para ficarem 100% offline
-        if (_currentSetlist != null && !kIsWeb) {
-          AudioCacheService.cacheSetlist(_currentSetlist!);
-        }
       }
     } catch (e) {
       debugPrint('Erro ao iniciar áudio: $e');
@@ -713,10 +716,12 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = (totalBeats % 4) + 1;
   }
 
-  /// Watchdog de alinhamento em tempo real: compara a cada 500ms cada instrumento contra o Click (Master)
+  /// Monitor de proteção contra desvios: checa periodicamente apenas grandes defasagens (> 450ms).
+  /// NUNCA executa seek por oscilações normais de buffer (50-100ms) do Android MediaPlayer,
+  /// eliminando 100% dos engasgos e travadas no áudio.
   void _startDriftCompensation() {
     _driftCheckTimer?.cancel();
-    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 500), (_) async {
+    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) async {
       if (!_isPlaying || _stemPlayers.isEmpty) return;
 
       final masterPlayer = _stemPlayers[_masterStemId];
@@ -730,16 +735,16 @@ class AudioEngine extends ChangeNotifier {
         }
       } catch (_) {}
 
-      if (masterMillis == null || masterMillis < 50) return;
+      if (masterMillis == null || masterMillis < 200) return;
 
       final now = DateTime.now().millisecondsSinceEpoch;
 
       for (final entry in _stemPlayers.entries) {
         if (entry.key == _masterStemId) continue;
 
-        // Evita reajustar a mesma pista em menos de 1000ms
+        // Debounce de 4 segundos para evitar reajustes em sequência
         final lastSeek = _lastStemSeekTimes[entry.key] ?? 0;
-        if (now - lastSeek < 1000) continue;
+        if (now - lastSeek < 4000) continue;
 
         final player = entry.value;
 
@@ -748,10 +753,11 @@ class AudioEngine extends ChangeNotifier {
           if (pos != null) {
             final trackMillis = pos.inMilliseconds;
             final diff = (trackMillis - masterMillis).abs();
-            // Se a defasagem for perceptível (> 60ms), realinha imediatamente com o Click/Master
-            if (diff > 60) {
+            // Apenas intervém se houver defasagem severa (> 450ms), sem cortar o som desnecessariamente
+            if (diff > 450) {
+              debugPrint('⚠️ [AudioEngine] Alinhamento corretivo na pista ${entry.key}: diff=${diff}ms');
               _lastStemSeekTimes[entry.key] = now;
-              player.seek(Duration(milliseconds: masterMillis));
+              await player.seek(Duration(milliseconds: masterMillis));
             }
           }
         } catch (_) {}

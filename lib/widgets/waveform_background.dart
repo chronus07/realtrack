@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
-class WaveformBackground extends StatefulWidget {
+class WaveformBackground extends StatelessWidget {
   final double progress;
   final Color trackColor;
   final bool isPlaying;
@@ -18,58 +18,16 @@ class WaveformBackground extends StatefulWidget {
   });
 
   @override
-  State<WaveformBackground> createState() => _WaveformBackgroundState();
-}
-
-class _WaveformBackgroundState extends State<WaveformBackground>
-    with SingleTickerProviderStateMixin {
-  AnimationController? _animController;
-
-  @override
-  void initState() {
-    super.initState();
-    _animController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1800),
-    );
-    if (widget.isPlaying) {
-      _animController?.repeat();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant WaveformBackground oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.isPlaying && !oldWidget.isPlaying) {
-      _animController?.repeat();
-    } else if (!widget.isPlaying && oldWidget.isPlaying) {
-      _animController?.stop();
-    }
-  }
-
-  @override
-  void dispose() {
-    _animController?.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: AnimatedBuilder(
-        animation: _animController ?? const AlwaysStoppedAnimation(0.0),
-        builder: (context, _) {
-          return CustomPaint(
-            painter: _TrackWaveformPainter(
-              progress: widget.progress.clamp(0.0, 1.0),
-              trackColor: widget.trackColor,
-              isPlaying: widget.isPlaying,
-              stemName: widget.stemName,
-              beat: widget.beat,
-              animValue: _animController?.value ?? 0.0,
-            ),
-          );
-        },
+      child: CustomPaint(
+        painter: _TrackWaveformPainter(
+          progress: progress.clamp(0.0, 1.0),
+          trackColor: trackColor,
+          isPlaying: isPlaying,
+          stemName: stemName,
+          beat: beat,
+        ),
       ),
     );
   }
@@ -81,7 +39,6 @@ class _TrackWaveformPainter extends CustomPainter {
   final bool isPlaying;
   final String stemName;
   final int beat;
-  final double animValue;
 
   _TrackWaveformPainter({
     required this.progress,
@@ -89,7 +46,6 @@ class _TrackWaveformPainter extends CustomPainter {
     required this.isPlaying,
     required this.stemName,
     required this.beat,
-    required this.animValue,
   });
 
   @override
@@ -108,6 +64,9 @@ class _TrackWaveformPainter extends CustomPainter {
     const barCount = 42;
     final barWidth = size.width / barCount;
 
+    // Fase orgânica baseada no avanço do cursor e no tempo musical
+    final motionPhase = (progress * 40 * math.pi) + (beat * 0.785);
+
     // 1. SILHUETA DO ESPECTRO DE FREQUÊNCIAS INFERIORES (Sub-Bass / Médios)
     final playedSpectrumPath = Path()..moveTo(0, size.height);
     final upcomingSpectrumPath = Path()..moveTo(cursorX, size.height);
@@ -123,7 +82,7 @@ class _TrackWaveformPainter extends CustomPainter {
       } else if (isDrums) {
         hFactor = (i % 4 == 0) ? 0.82 : (0.18 + (math.sin(i * 0.8) * 0.22).abs());
       } else if (isBass) {
-        hFactor = 0.35 + 0.35 * (math.sin(t * 8 + (isPlaying ? animValue * 2 * math.pi : 0)).abs());
+        hFactor = 0.35 + 0.35 * (math.sin(t * 8 + (isPlaying ? motionPhase : 0)).abs());
       } else {
         final wave1 = math.sin(t * 12) * 0.25;
         final wave2 = math.cos(t * 6) * 0.18;
@@ -132,7 +91,7 @@ class _TrackWaveformPainter extends CustomPainter {
 
       // Nuances ativas quando tocando
       if (isPlaying && x <= cursorX) {
-        final liveWobble = math.sin((x / size.width) * 14 + animValue * 2 * math.pi) * 0.08;
+        final liveWobble = math.sin((x / size.width) * 14 + motionPhase) * 0.08;
         hFactor = (hFactor + liveWobble).clamp(0.1, 0.95);
       }
 
@@ -203,7 +162,7 @@ class _TrackWaveformPainter extends CustomPainter {
 
       // Nuances dinâmicas de respiração durante o play
       if (isPlaying && x <= cursorX) {
-        final wobble = math.sin((x / size.width) * 12 + animValue * 3 * math.pi) * 2.2;
+        final wobble = math.sin((x / size.width) * 12 + motionPhase) * 2.2;
         amp = (amp + wobble).clamp(2.0, maxAmp);
       }
 
@@ -240,7 +199,6 @@ class _TrackWaveformPainter extends CustomPainter {
     return oldDelegate.progress != progress ||
         oldDelegate.trackColor != trackColor ||
         oldDelegate.isPlaying != isPlaying ||
-        oldDelegate.beat != beat ||
-        oldDelegate.animValue != animValue;
+        oldDelegate.beat != beat;
   }
 }
