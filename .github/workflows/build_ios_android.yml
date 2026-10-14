@@ -81,7 +81,7 @@ jobs:
           cache: true
 
       - name: Generate iOS Native Platform
-        run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
+        run: flutter create --offline . --project-name realtracks --org com.realtracks.app --platforms=ios || flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
 
       - name: Install Dependencies
         run: flutter pub get
@@ -121,7 +121,9 @@ jobs:
           cache: true
 
       - name: Generate Web Platform
-        run: flutter create . --project-name realtracks --org com.realtracks.app --platforms=web
+        run: |
+          flutter config --enable-web
+          flutter create --offline . --project-name realtracks --org com.realtracks.app --platforms=web || flutter create . --project-name realtracks --org com.realtracks.app --platforms=web
 
       - name: Install Dependencies
         run: flutter pub get
