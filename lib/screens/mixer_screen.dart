@@ -162,6 +162,56 @@ class MixerScreen extends StatelessWidget {
               // Barra de Pitch compacta
               const PitchControlBar(),
 
+              // Banner visual quando o áudio está carregando / baixando para o aparelho
+              if (engine.isLoadingAudio) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.primary.withOpacity(0.4)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              engine.loadingStatus,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primary),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '${(engine.loadingProgress * 100).toInt()}%',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primary),
+                          ),
+                        ],
+                      ),
+                      if (engine.loadingProgress > 0) ...[
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: engine.loadingProgress,
+                            backgroundColor: Colors.white12,
+                            valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primary),
+                            minHeight: 4,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+
               // Marcadores de seção (se existirem)
               if (song.sections.isNotEmpty) ...[
                 const SizedBox(height: 6),

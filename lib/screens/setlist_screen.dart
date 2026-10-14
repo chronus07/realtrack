@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/song.dart';
 import '../models/setlist.dart';
+import '../services/audio_cache_service.dart';
 import '../services/audio_engine.dart';
 import '../services/pitch_shifter.dart';
 import '../services/supabase_service.dart';
@@ -23,6 +25,9 @@ class SetlistScreen extends StatefulWidget {
 
 class _SetlistScreenState extends State<SetlistScreen> {
   bool _isSyncing = false;
+  bool _isDownloadingSetlist = false;
+  double _downloadSetlistProgress = 0.0;
+  String _downloadSetlistStatus = '';
 
   @override
   void initState() {
@@ -92,6 +97,84 @@ class _SetlistScreenState extends State<SetlistScreen> {
     final current = engine.currentSetlist;
     if (current != null) {
       await SupabaseService.saveSetlistToCloud(current);
+    }
+  }
+
+  Future<void> _downloadSetlistForOffline(Setlist setlist) async {
+    if (kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ℹ️ Na Web as faixas são reproduzidas diretamente pelo navegador.'),
+          backgroundColor: Colors.blueGrey,
+        ),
+      );
+      return;
+    }
+
+    if (setlist.songs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ Adicione músicas na playlist antes de baixar para uso offline.'),
+          backgroundColor: AppTheme.amberCue,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isDownloadingSetlist = true;
+      _downloadSetlistProgress = 0.0;
+      _downloadSetlistStatus = 'Iniciando download da playlist...';
+    });
+
+    try {
+      final totalSongs = setlist.songs.length;
+      for (int i = 0; i < totalSongs; i++) {
+        final song = setlist.songs[i];
+        if (!mounted) break;
+        setState(() {
+          _downloadSetlistStatus = 'Baixando "${song.title}" (${i + 1}/$totalSongs)...';
+          _downloadSetlistProgress = (i + 1) / totalSongs;
+        });
+
+        await AudioCacheService.downloadSong(
+          song,
+          onProgress: (done, total, pct) {
+            if (mounted) {
+              setState(() {
+                _downloadSetlistStatus = 'Baixando "${song.title}": $done/$total faixas...';
+              });
+            }
+          },
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ Todas as músicas de "${setlist.title}" foram salvas no celular com sincronismo perfeito!'),
+            backgroundColor: AppTheme.emeraldSafe,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erro ao baixar faixas: $e'),
+            backgroundColor: AppTheme.roseMute,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDownloadingSetlist = false;
+          _downloadSetlistProgress = 0.0;
+          _downloadSetlistStatus = '';
+        });
+      }
     }
   }
 
@@ -605,6 +688,22 @@ class _SetlistScreenState extends State<SetlistScreen> {
                         ],
                       ),
                     ),
+                    if (!kIsWeb) ...[
+                      IconButton(
+                        icon: _isDownloadingSetlist
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.emeraldSafe),
+                              )
+                            : const Icon(Icons.download_for_offline, size: 22, color: AppTheme.emeraldSafe),
+                        tooltip: 'Baixar playlist no celular para sincronismo perfeito',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                        onPressed: _isDownloadingSetlist ? null : () => _downloadSetlistForOffline(setlist),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     if (engine.allSetlists.length > 1)
                       IconButton(
                         icon: const Icon(Icons.delete_outline, size: 18, color: Colors.white38),
@@ -616,6 +715,54 @@ class _SetlistScreenState extends State<SetlistScreen> {
                   ],
                 ),
               ),
+
+              // Banner visual de download da playlist para o aparelho
+              if (_isDownloadingSetlist) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppTheme.emeraldSafe.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.emeraldSafe.withOpacity(0.4)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.emeraldSafe),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _downloadSetlistStatus,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.emeraldSafe),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Text(
+                            '${(_downloadSetlistProgress * 100).toInt()}%',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.emeraldSafe),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(4),
+                        child: LinearProgressIndicator(
+                          value: _downloadSetlistProgress,
+                          backgroundColor: Colors.white12,
+                          valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.emeraldSafe),
+                          minHeight: 4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
 
               // 3. LISTA DE MÚSICAS DA PLAYLIST COM REORDENAÇÃO
@@ -770,6 +917,26 @@ class _SetlistScreenState extends State<SetlistScreen> {
                                           ),
                                         ),
                                       ),
+                                      if (!kIsWeb)
+                                        FutureBuilder<bool>(
+                                          future: AudioCacheService.isSongFullyCached(song),
+                                          builder: (context, snapshot) {
+                                            final isCached = snapshot.data ?? false;
+                                            return Tooltip(
+                                              message: isCached
+                                                  ? 'Salva no aparelho (Zero Latência)'
+                                                  : 'Na nuvem (baixa ao tocar ou pelo botão acima)',
+                                              child: Padding(
+                                                padding: const EdgeInsets.only(left: 4),
+                                                child: Icon(
+                                                  isCached ? Icons.offline_pin : Icons.cloud_outlined,
+                                                  size: 16,
+                                                  color: isCached ? AppTheme.emeraldSafe : Colors.white38,
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
                                       const SizedBox(width: 4),
                                       // Botão Explícito: Tirar da Playlist (mantém no acervo)
                                       IconButton(

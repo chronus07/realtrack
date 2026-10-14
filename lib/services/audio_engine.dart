@@ -25,6 +25,10 @@ class AudioEngine extends ChangeNotifier {
   String? _masterStemId;
   bool _isLoadingAudio = false;
   bool get isLoadingAudio => _isLoadingAudio;
+  String _loadingStatus = 'Carregando áudio...';
+  String get loadingStatus => _loadingStatus;
+  double _loadingProgress = 0.0;
+  double get loadingProgress => _loadingProgress;
 
   bool _isPlaying = false;
   bool _isSplitModeActive = true; // True = Modo Palco/Cabo Y (L: Click/Guia | R: P.A.)
@@ -290,6 +294,7 @@ class AudioEngine extends ChangeNotifier {
     }
     notifyListeners();
     await SupabaseService.deleteSongFromLibrary(songId);
+    await AudioCacheService.cleanOrphanedCache(_allSetlists);
   }
 
   // ==========================================
@@ -365,6 +370,7 @@ class AudioEngine extends ChangeNotifier {
     notifyListeners();
 
     SupabaseService.deleteSetlistFromCloud(id);
+    AudioCacheService.cleanOrphanedCache(_allSetlists);
   }
 
   void addSongToSetlist(String setlistId, Song song) {
@@ -406,6 +412,7 @@ class AudioEngine extends ChangeNotifier {
       }
       notifyListeners();
       SupabaseService.saveSetlistToCloud(_currentSetlist!);
+      AudioCacheService.cleanOrphanedCache(_allSetlists);
     }
   }
 
@@ -476,10 +483,33 @@ class AudioEngine extends ChangeNotifier {
 
     _isLoadingAudio = true;
     _isPlaying = true;
+    _loadingProgress = 0.0;
+    _loadingStatus = 'Preparando faixas...';
     notifyListeners();
 
     try {
       WakelockPlus.enable();
+
+      // GARANTIA TOTAL DE SINCRONISMO NO CELULAR:
+      // Se não for Web, certifica que 100% das pistas estão salvas localmente no aparelho.
+      // Isso elimina 100% dos atrasos de rede e disparos dessincronizados do Android.
+      if (!kIsWeb) {
+        final isCached = await AudioCacheService.isSongFullyCached(song);
+        if (!isCached) {
+          _loadingStatus = 'Baixando faixas para o aparelho (sincronismo perfeito)...';
+          _loadingProgress = 0.05;
+          notifyListeners();
+
+          await AudioCacheService.downloadSong(
+            song,
+            onProgress: (done, total, pct) {
+              _loadingStatus = 'Salvando no aparelho: $done/$total faixas (${(pct * 100).toInt()}%)...';
+              _loadingProgress = pct;
+              notifyListeners();
+            },
+          );
+        }
+      }
 
       // 1. Inicializa os players se ainda não existirem
       if (_stemPlayers.isEmpty) {
@@ -586,18 +616,16 @@ class AudioEngine extends ChangeNotifier {
         // Fallback simulador se não houver áudios válidos
         _startPlaybackClock();
       } else {
-        // Se a posição for maior que 0, posiciona todas as pistas
+        // Posiciona todas as pistas exatamente na mesma marcação de tempo
         final seekPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
-        if (_currentPositionSeconds > 0) {
-          final seekFutures = _stemPlayers.values.map((p) async {
-            try {
-              await p.seek(seekPos);
-            } catch (_) {}
-          });
-          await Future.wait(seekFutures);
-        }
+        final seekFutures = _stemPlayers.values.map((p) async {
+          try {
+            await p.seek(seekPos);
+          } catch (_) {}
+        });
+        await Future.wait(seekFutures);
 
-        // DISPARO SIMULTÂNEO VIA FUTURE.WAIT
+        // DISPARO SIMULTÂNEO NATIVO
         final resumeFutures = _stemPlayers.values.map((p) async {
           try {
             await p.resume();
@@ -614,11 +642,13 @@ class AudioEngine extends ChangeNotifier {
         // Inicia relógio de reprodução com watchdog de avanço
         _startPlaybackClock();
 
-        // Inicia o monitor de alinhamento suave (a cada 3.0s, sem travamentos)
+        // Inicia o monitor de alinhamento em tempo real (tolerância de 80ms)
         _startDriftCompensation();
 
-        // Download suave em cache no mobile em segundo plano
-        AudioCacheService.prefetchSong(song);
+        // Em segundo plano, baixa as outras músicas da playlist para ficarem 100% offline
+        if (_currentSetlist != null && !kIsWeb) {
+          AudioCacheService.cacheSetlist(_currentSetlist!);
+        }
       }
     } catch (e) {
       debugPrint('Erro ao iniciar áudio: $e');
@@ -638,10 +668,10 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = (totalBeats % 4) + 1;
   }
 
-  /// Watchdog de drift suave: a cada 3.0s verifica se alguma pista divergiu mais de 250ms
+  /// Watchdog de alinhamento em tempo real: verifica a cada 1.0s se alguma pista divergiu mais de 80ms
   void _startDriftCompensation() {
     _driftCheckTimer?.cancel();
-    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 3000), (_) async {
+    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) async {
       if (!_isPlaying || _stemPlayers.isEmpty) return;
 
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -649,9 +679,9 @@ class AudioEngine extends ChangeNotifier {
       for (final entry in _stemPlayers.entries) {
         if (entry.key == _masterStemId) continue;
 
-        // Evita reajustar a mesma pista com intervalo menor que 5 segundos
+        // Evita reajustar a mesma pista em menos de 1.5s
         final lastSeek = _lastStemSeekTimes[entry.key] ?? 0;
-        if (now - lastSeek < 5000) continue;
+        if (now - lastSeek < 1500) continue;
 
         final player = entry.value;
 
@@ -660,8 +690,8 @@ class AudioEngine extends ChangeNotifier {
           if (pos != null) {
             final trackSec = pos.inMilliseconds / 1000.0;
             final diff = (trackSec - _currentPositionSeconds).abs();
-            // Apenas reajusta se a defasagem for perceptível (> 250ms)
-            if (diff > 0.250) {
+            // Se a defasagem for perceptível (> 80ms), realinha imediatamente com o Click/Master
+            if (diff > 0.080) {
               _lastStemSeekTimes[entry.key] = now;
               await player.seek(Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()));
             }

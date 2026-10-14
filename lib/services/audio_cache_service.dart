@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import '../models/song.dart';
+import '../models/setlist.dart';
 import 'supabase_service.dart';
 
 class AudioCacheService {
@@ -44,6 +45,28 @@ class AudioCacheService {
     return null;
   }
 
+  /// Verifica se todas as pistas de uma música estão 100% salvas no aparelho
+  static Future<bool> isSongFullyCached(Song song) async {
+    if (kIsWeb) return true;
+    for (final stem in song.stems) {
+      if (stem.filePath != null && stem.filePath!.isNotEmpty) {
+        final local = await getLocalPathIfExists(stem.filePath!);
+        if (local == null) return false;
+      }
+    }
+    return true;
+  }
+
+  /// Verifica se todas as músicas de uma playlist estão baixadas
+  static Future<bool> isSetlistFullyCached(Setlist setlist) async {
+    if (kIsWeb) return true;
+    for (final song in setlist.songs) {
+      final cached = await isSongFullyCached(song);
+      if (!cached) return false;
+    }
+    return true;
+  }
+
   /// Retorna o arquivo local se existir, ou baixa da nuvem de forma segura
   static Future<String> getOrDownloadAudio(
     String storagePath, {
@@ -53,6 +76,7 @@ class AudioCacheService {
       return SupabaseService.getAudioUrl(storagePath);
     }
 
+    http.Client? client;
     try {
       final file = await _getLocalFile(storagePath);
       if (await file.exists() && await file.length() > 1024) {
@@ -67,7 +91,7 @@ class AudioCacheService {
       _downloadProgress[storagePath] = 0.01;
 
       final url = SupabaseService.getAudioUrl(storagePath);
-      final client = http.Client();
+      client = http.Client();
       final request = http.Request('GET', Uri.parse(url));
       final response = await client.send(request);
 
@@ -110,6 +134,7 @@ class AudioCacheService {
     } catch (e) {
       debugPrint('Erro no download em cache da faixa $storagePath: $e');
     } finally {
+      client?.close();
       _activeDownloads.remove(storagePath);
     }
 
@@ -117,25 +142,115 @@ class AudioCacheService {
     return SupabaseService.getAudioUrl(storagePath);
   }
 
-  /// Baixa todas as pistas de uma música uma por uma em segundo plano sem saturar a rede
+  /// Baixa todas as pistas de uma música com concorrência otimizada
+  static Future<void> downloadSong(
+    Song song, {
+    void Function(int done, int total, double progress)? onProgress,
+  }) async {
+    if (kIsWeb) return;
+
+    final stemsToDownload = song.stems.where(
+      (s) => s.filePath != null && s.filePath!.isNotEmpty,
+    ).toList();
+
+    if (stemsToDownload.isEmpty) return;
+
+    int completed = 0;
+    final total = stemsToDownload.length;
+
+    // Baixa de 3 em 3 faixas para máxima velocidade sem engasgar o celular
+    for (int i = 0; i < stemsToDownload.length; i += 3) {
+      final chunk = stemsToDownload.sublist(i, (i + 3 > total) ? total : i + 3);
+      await Future.wait(chunk.map((stem) async {
+        final local = await getLocalPathIfExists(stem.filePath!);
+        if (local == null) {
+          await getOrDownloadAudio(stem.filePath!);
+        }
+        completed++;
+        onProgress?.call(completed, total, completed / total);
+      }));
+    }
+  }
+
+  /// Baixa a playlist inteira em segundo plano
+  static Future<void> cacheSetlist(
+    Setlist setlist, {
+    void Function(int currentSong, int totalSongs, String songTitle)? onProgress,
+  }) async {
+    if (kIsWeb) return;
+    final songs = setlist.songs;
+    for (int i = 0; i < songs.length; i++) {
+      final song = songs[i];
+      onProgress?.call(i + 1, songs.length, song.title);
+      await downloadSong(song);
+    }
+  }
+
+  /// Baixa suavemente as faixas de uma música em background
   static Future<void> prefetchSong(Song song) async {
     if (kIsWeb || _isPrefetching) return;
     _isPrefetching = true;
     try {
-      for (final stem in song.stems) {
-        if (stem.filePath != null && stem.filePath!.isNotEmpty) {
-          final local = await getLocalPathIfExists(stem.filePath!);
-          if (local == null) {
-            await getOrDownloadAudio(stem.filePath!);
-            // Intervalo suave de 400ms entre downloads para não travar conexões 4G/Wi-Fi
-            await Future.delayed(const Duration(milliseconds: 400));
+      await downloadSong(song);
+    } catch (e) {
+      debugPrint('Erro durante download de faixas: $e');
+    } finally {
+      _isPrefetching = false;
+    }
+  }
+
+  /// Remove do celular qualquer arquivo de áudio que NÃO pertença a nenhuma playlist ativa.
+  /// (Conforme regra do usuário: enquanto a playlist existir o cache é mantido; se a playlist for excluída, o cache é apagado)
+  static Future<void> cleanOrphanedCache(List<Setlist> activeSetlists) async {
+    if (kIsWeb) return;
+    try {
+      final dir = await _getCacheDirectory();
+      if (!await dir.exists()) return;
+
+      final Set<String> validFileNames = {};
+      for (final setlist in activeSetlists) {
+        for (final song in setlist.songs) {
+          for (final stem in song.stems) {
+            if (stem.filePath != null && stem.filePath!.isNotEmpty) {
+              final safeName = stem.filePath!.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+              validFileNames.add(safeName);
+            }
           }
         }
       }
+
+      final entities = dir.listSync();
+      int deletedCount = 0;
+      for (final entity in entities) {
+        if (entity is File) {
+          final fileName = entity.uri.pathSegments.last;
+          if (!validFileNames.contains(fileName) && !fileName.endsWith('.tmp')) {
+            try {
+              entity.deleteSync();
+              deletedCount++;
+              debugPrint('🧹 Cache limpo: removido áudio de playlist excluída: $fileName');
+            } catch (_) {}
+          }
+        }
+      }
+      if (deletedCount > 0) {
+        debugPrint('🧹 Total de $deletedCount arquivo(s) de áudio excluído(s) do aparelho.');
+      }
     } catch (e) {
-      debugPrint('Erro durante prefetch sequencial: $e');
-    } finally {
-      _isPrefetching = false;
+      debugPrint('Erro ao limpar cache órfão: $e');
+    }
+  }
+
+  /// Limpa 100% de todo o cache local de áudio
+  static Future<void> clearAllCache() async {
+    if (kIsWeb) return;
+    try {
+      final dir = await _getCacheDirectory();
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    } catch (e) {
+      debugPrint('Erro ao limpar todo o cache: $e');
     }
   }
 }
