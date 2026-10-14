@@ -827,11 +827,9 @@ class _SetlistScreenState extends State<SetlistScreen> {
 // ==========================================
 class _AddSongsBottomSheet extends StatefulWidget {
   final VoidCallback onNavigateToUpload;
-  final VoidCallback? onSongsAdded;
 
   const _AddSongsBottomSheet({
     required this.onNavigateToUpload,
-    this.onSongsAdded,
   });
 
   @override

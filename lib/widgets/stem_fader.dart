@@ -303,6 +303,6 @@ class StemFader extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
 }
