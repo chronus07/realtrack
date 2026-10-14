@@ -10,10 +10,13 @@ class AudioCacheService {
   static final Map<String, double> _downloadProgress = {};
   static final Set<String> _activeDownloads = {};
   static final Map<String, String> _cachedPaths = {};
+  static final Map<String, Uint8List> _webCache = {};
   static bool _isPrefetching = false;
 
   static double getProgress(String storagePath) => _downloadProgress[storagePath] ?? 0.0;
   static bool isDownloading(String storagePath) => _activeDownloads.contains(storagePath);
+  static bool isWebCached(String storagePath) => _webCache.containsKey(storagePath);
+  static Uint8List? getWebBytes(String storagePath) => _webCache[storagePath];
 
   /// Retorna o diretório base de cache de áudio permanente no aparelho
   static Future<Directory> _getCacheDirectory() async {
@@ -56,9 +59,16 @@ class AudioCacheService {
     return null;
   }
 
-  /// Verifica se todas as pistas de uma música estão salvas localmente no aparelho
+  /// Verifica se todas as pistas de uma música estão salvas localmente no aparelho (ou na memória web)
   static Future<bool> isSongFullyCached(Song song) async {
-    if (kIsWeb) return true;
+    if (kIsWeb) {
+      for (final stem in song.stems) {
+        if (stem.filePath != null && stem.filePath!.isNotEmpty) {
+          if (!_webCache.containsKey(stem.filePath!)) return false;
+        }
+      }
+      return true;
+    }
     for (final stem in song.stems) {
       if (stem.filePath != null && stem.filePath!.isNotEmpty) {
         final local = await getLocalPathIfExists(stem.filePath!);
@@ -182,8 +192,6 @@ class AudioCacheService {
     Song song, {
     void Function(int done, int total, double progress)? onProgress,
   }) async {
-    if (kIsWeb) return;
-
     final stemsToDownload = song.stems.where(
       (s) => s.filePath != null && s.filePath!.isNotEmpty,
     ).toList();
@@ -192,6 +200,28 @@ class AudioCacheService {
 
     int completed = 0;
     final total = stemsToDownload.length;
+
+    if (kIsWeb) {
+      for (final stem in stemsToDownload) {
+        if (_webCache.containsKey(stem.filePath!)) {
+          completed++;
+          onProgress?.call(completed, total, completed / total);
+          continue;
+        }
+        try {
+          final url = SupabaseService.getAudioUrl(stem.filePath!);
+          final res = await http.get(Uri.parse(url));
+          if (res.statusCode == 200) {
+            _webCache[stem.filePath!] = res.bodyBytes;
+          }
+        } catch (e) {
+          debugPrint('Erro ao carregar stem na Web RAM: $e');
+        }
+        completed++;
+        onProgress?.call(completed, total, completed / total);
+      }
+      return;
+    }
 
     // Baixa de 2 em 2 para garantir gravação estável na memória flash do celular
     for (int i = 0; i < stemsToDownload.length; i += 2) {

@@ -1,7 +1,7 @@
 name: realtracks
 description: "RealTracks - Disparador de Multitracks e Gestor de Repertório para Bandas"
 publish_to: "none"
-version: 1.0.15+16
+version: 1.0.16+17
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
