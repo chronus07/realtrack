@@ -141,6 +141,101 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  bool _hasSetlistsChanged(List<Setlist> incoming) {
+    if (_allSetlists.length != incoming.length) return true;
+    for (int i = 0; i < _allSetlists.length; i++) {
+      final oldSetlist = _allSetlists[i];
+      final newSetlist = incoming[i];
+      if (oldSetlist.id != newSetlist.id || oldSetlist.title != newSetlist.title) return true;
+      if (oldSetlist.songs.length != newSetlist.songs.length) return true;
+      for (int j = 0; j < oldSetlist.songs.length; j++) {
+        final songA = oldSetlist.songs[j];
+        final songB = newSetlist.songs[j];
+        if (songA.id != songB.id || songA.title != songB.title) return true;
+        if (songA.stems.length != songB.stems.length) return true;
+      }
+    }
+    return false;
+  }
+
+  void _mergeSetlistsPreservingRuntimeState(List<Setlist> incomingList, {String? selectId}) {
+    // 1. Memoriza a música ativa e seu índice atual
+    final currentActiveSongId = currentSong?.id;
+    final oldSongIndex = _currentSongIndex;
+    final targetSetlistId = selectId ?? _currentSetlist?.id;
+
+    // 2. Coleta o estado de runtime de TODAS as pistas existentes (volume, pan, canal, mute, solo)
+    final Map<String, StemTrack> existingStems = {};
+    final Map<String, int> existingPitchOffsets = {};
+
+    for (final setlist in _allSetlists) {
+      for (final song in setlist.songs) {
+        existingPitchOffsets[song.id] = song.pitchOffsetSemitones;
+        for (final stem in song.stems) {
+          existingStems[stem.id] = stem;
+          existingStems['${song.id}_${stem.name.toLowerCase()}'] = stem;
+        }
+      }
+    }
+
+    // 3. Aplica os estados nas músicas e pistas recém-chegadas da nuvem
+    for (final setlist in incomingList) {
+      for (final song in setlist.songs) {
+        if (existingPitchOffsets.containsKey(song.id)) {
+          song.pitchOffsetSemitones = existingPitchOffsets[song.id]!;
+          song.currentKey = PitchShifterService.transposeNote(song.originalKey, song.pitchOffsetSemitones);
+        }
+        for (final stem in song.stems) {
+          final existing = existingStems[stem.id] ?? existingStems['${song.id}_${stem.name.toLowerCase()}'];
+          if (existing != null) {
+            stem.volume = existing.volume;
+            stem.pan = existing.pan;
+            stem.outputChannel = existing.outputChannel;
+            stem.isMuted = existing.isMuted;
+            stem.isSolo = existing.isSolo;
+          }
+        }
+      }
+    }
+
+    // 4. Substitui a lista de setlists de forma limpa
+    _allSetlists.clear();
+    _allSetlists.addAll(incomingList);
+
+    // 5. Restaura a playlist atual
+    if (targetSetlistId != null) {
+      _currentSetlist = _allSetlists.firstWhere(
+        (s) => s.id == targetSetlistId,
+        orElse: () => _allSetlists.first,
+      );
+    } else if (_allSetlists.isNotEmpty) {
+      _currentSetlist = _allSetlists.first;
+    }
+
+    // 6. Restaura a posição da música na playlist sem reiniciar para zero
+    if (_currentSetlist != null && _currentSetlist!.songs.isNotEmpty) {
+      if (currentActiveSongId != null) {
+        final foundIdx = _currentSetlist!.songs.indexWhere((s) => s.id == currentActiveSongId);
+        if (foundIdx != -1) {
+          _currentSongIndex = foundIdx;
+        } else {
+          _currentSongIndex = oldSongIndex.clamp(0, _currentSetlist!.songs.length - 1);
+        }
+      } else {
+        _currentSongIndex = oldSongIndex.clamp(0, _currentSetlist!.songs.length - 1);
+      }
+      _pitchOffset = _currentSetlist!.songs[_currentSongIndex].pitchOffsetSemitones;
+    } else {
+      _currentSongIndex = 0;
+      _pitchOffset = 0;
+    }
+
+    // 7. Se as pistas estiverem no mixer/reproduzindo, garante consistência de áudio
+    if (_stemPlayers.isNotEmpty) {
+      _applyAllStemsAudioSettings();
+    }
+  }
+
   Future<void> syncFromCloudSilently() async {
     if (!AppConfig.isConfigured || _isSyncingCloud) return;
     _isSyncingCloud = true;
@@ -153,27 +248,14 @@ class AudioEngine extends ChangeNotifier {
         _masterLibrary.addAll(cloudSongs);
       }
 
-      // 2. Atualiza Playlists
+      // 2. Atualiza Playlists preservando 100% dos Solos, Mutes e Volumes locais
       final cloudSetlists = await SupabaseService.fetchAllSetlists();
       if (cloudSetlists.isNotEmpty) {
-        final currentId = _currentSetlist?.id;
-        _allSetlists.clear();
-        _allSetlists.addAll(cloudSetlists);
-
-        if (currentId != null) {
-          final matched = _allSetlists.firstWhere(
-            (s) => s.id == currentId,
-            orElse: () => _allSetlists.first,
-          );
-          _currentSetlist = matched;
-          if (_currentSongIndex >= _currentSetlist!.songs.length) {
-            _currentSongIndex = (_currentSetlist!.songs.length - 1).clamp(0, 999);
-          }
-        } else {
-          _currentSetlist = _allSetlists.first;
+        if (_hasSetlistsChanged(cloudSetlists)) {
+          _mergeSetlistsPreservingRuntimeState(cloudSetlists);
+          notifyListeners();
         }
       }
-      notifyListeners();
     } catch (e) {
       debugPrint('Silently sync error: $e');
     } finally {
@@ -221,26 +303,7 @@ class AudioEngine extends ChangeNotifier {
       }
       return;
     }
-    _allSetlists.clear();
-    _allSetlists.addAll(list);
-
-    if (selectId != null) {
-      _currentSetlist = _allSetlists.firstWhere(
-        (s) => s.id == selectId,
-        orElse: () => _allSetlists.first,
-      );
-    } else if (_currentSetlist != null) {
-      _currentSetlist = _allSetlists.firstWhere(
-        (s) => s.id == _currentSetlist!.id,
-        orElse: () => _allSetlists.first,
-      );
-    } else {
-      _currentSetlist = _allSetlists.first;
-    }
-    _currentSongIndex = 0;
-    _pitchOffset = (_currentSetlist != null && _currentSetlist!.songs.isNotEmpty)
-        ? _currentSetlist!.songs[0].pitchOffsetSemitones
-        : 0;
+    _mergeSetlistsPreservingRuntimeState(list, selectId: selectId);
     notifyListeners();
   }
 
@@ -758,7 +821,9 @@ class AudioEngine extends ChangeNotifier {
   void setStemVolume(String stemId, double volume) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
+    final index = song.stems.indexWhere((s) => s.id == stemId);
+    if (index == -1) return;
+    final stem = song.stems[index];
     stem.volume = volume.clamp(0.0, 1.0);
     _applyStemAudioSettings(stem);
     notifyListeners();
@@ -768,7 +833,9 @@ class AudioEngine extends ChangeNotifier {
   void setStemPan(String stemId, double pan) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
+    final index = song.stems.indexWhere((s) => s.id == stemId);
+    if (index == -1) return;
+    final stem = song.stems[index];
     stem.setPan(pan);
     _applyStemAudioSettings(stem);
     notifyListeners();
@@ -811,7 +878,9 @@ class AudioEngine extends ChangeNotifier {
   void toggleMute(String stemId) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
+    final index = song.stems.indexWhere((s) => s.id == stemId);
+    if (index == -1) return;
+    final stem = song.stems[index];
     stem.isMuted = !stem.isMuted;
     _applyAllStemsAudioSettings();
     notifyListeners();
@@ -820,7 +889,9 @@ class AudioEngine extends ChangeNotifier {
   void toggleSolo(String stemId) {
     final song = currentSong;
     if (song == null) return;
-    final stem = song.stems.firstWhere((s) => s.id == stemId, orElse: () => song.stems.first);
+    final index = song.stems.indexWhere((s) => s.id == stemId);
+    if (index == -1) return;
+    final stem = song.stems[index];
     stem.isSolo = !stem.isSolo;
     _applyAllStemsAudioSettings();
     notifyListeners();
