@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import '../config/app_config.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
@@ -21,9 +22,9 @@ class AudioEngine extends ChangeNotifier {
   Setlist? _currentSetlist;
   int _currentSongIndex = 0;
 
-  // PLAYERS DE ÁUDIO REAL PARA AS PISTAS
-  final Map<String, AudioPlayer> _stemPlayers = {};
-  final Map<String, double> _stemPlaybackRates = {};
+  // REPRODUÇÃO MULTITRACKS COM SOLOUD (ENGINE C++ SAMPLE-ACCURATE)
+  final Map<String, AudioSource> _stemSources = {};
+  final Map<String, SoundHandle> _stemHandles = {};
   String? _masterStemId;
   bool _isLoadingAudio = false;
   String _loadingStatus = 'Carregando áudio...';
@@ -41,12 +42,9 @@ class AudioEngine extends ChangeNotifier {
   int _lastPositionUpdateMillis = 0;
 
   Timer? _playbackTicker;
-  Timer? _driftCheckTimer;
   Timer? _cloudSyncTimer;
   RealtimeChannel? _realtimeChannel;
   bool _isSyncingCloud = false;
-
-  final Map<String, int> _lastStemSeekTimes = {};
 
   AudioEngine() {
     _initAudioGlobal();
@@ -55,16 +53,14 @@ class AudioEngine extends ChangeNotifier {
     syncFromCloudSilently();
   }
 
-  void _initAudioGlobal() {
+  Future<void> _initAudioGlobal() async {
     try {
-      AudioPlayer.global.setAudioContext(
-        AudioContextConfig(
-          focus: AudioContextConfigFocus.mixWithOthers,
-          stayAwake: true,
-        ).build(),
-      );
+      if (!SoLoud.instance.isInitialized) {
+        await SoLoud.instance.init();
+        debugPrint('AudioEngine: SoLoud engine inicializado com sucesso.');
+      }
     } catch (e) {
-      debugPrint('AudioEngine global audio context error: $e');
+      debugPrint('AudioEngine SoLoud init error: $e');
     }
   }
 
@@ -237,7 +233,7 @@ class AudioEngine extends ChangeNotifier {
     }
 
     // 7. Se as pistas estiverem no mixer/reproduzindo, garante consistência de áudio
-    if (_stemPlayers.isNotEmpty) {
+    if (_stemHandles.isNotEmpty) {
       _applyAllStemsAudioSettings();
     }
   }
@@ -506,31 +502,20 @@ class AudioEngine extends ChangeNotifier {
   // REPRODUÇÃO MULTITRACKS COM SINCRONISMO DE ALTA PRECISÃO
   // ==========================================
 
-  void _resetAllPlaybackRates() {
-    for (final entry in _stemPlayers.entries) {
-      if ((_stemPlaybackRates[entry.key] ?? 1.0) != 1.0) {
-        try {
-          entry.value.setPlaybackRate(1.0);
-        } catch (_) {}
-        _stemPlaybackRates[entry.key] = 1.0;
-      }
-    }
-  }
-
   void _disposeStemPlayers() {
-    _driftCheckTimer?.cancel();
     _playbackTicker?.cancel();
-    _resetAllPlaybackRates();
-    for (final player in _stemPlayers.values) {
+    try {
+      SoLoud.instance.stopAll();
+    } catch (_) {}
+    _stemHandles.clear();
+
+    for (final source in _stemSources.values) {
       try {
-        player.stop();
-        player.dispose();
+        SoLoud.instance.disposeSource(source);
       } catch (_) {}
     }
-    _stemPlayers.clear();
-    _stemPlaybackRates.clear();
+    _stemSources.clear();
     _masterStemId = null;
-    _lastStemSeekTimes.clear();
   }
 
   Future<void> togglePlay() async {
@@ -538,8 +523,7 @@ class AudioEngine extends ChangeNotifier {
     if (_isPlaying) {
       await _pausePlayback();
     } else {
-      // Se as pistas já estão carregadas e apenas pausadas, retoma instantaneamente sem re-baixar!
-      if (_stemPlayers.isNotEmpty) {
+      if (_stemHandles.isNotEmpty) {
         await _resumePlayback();
       } else {
         await _startPlayback();
@@ -548,7 +532,7 @@ class AudioEngine extends ChangeNotifier {
   }
 
   Future<void> _resumePlayback() async {
-    if (_stemPlayers.isEmpty) {
+    if (_stemHandles.isEmpty || _stemSources.isEmpty) {
       await _startPlayback();
       return;
     }
@@ -557,34 +541,15 @@ class AudioEngine extends ChangeNotifier {
     _isLoadingAudio = false;
     WakelockPlus.enable();
 
-    // MUTE-START-ALIGN PARA RESUME:
-    // 1. Muta temporariamente todas as faixas para buffer de retomada silencioso
-    for (final player in _stemPlayers.values) {
+    // Retoma todas as vozes simultaneamente no motor C++ SoLoud
+    for (final handle in _stemHandles.values) {
       try {
-        await player.setVolume(0.0);
+        SoLoud.instance.setPause(handle, false);
       } catch (_) {}
     }
 
-    // 2. Barreira de acomodação antes de retomar: alinha rigorosamente com a posição do master
-    if (_stemPlayers.containsKey(_masterStemId)) {
-      try {
-        final masterPos = await _stemPlayers[_masterStemId]!.getCurrentPosition();
-        if (masterPos != null) {
-          await Future.wait(_stemPlayers.values.map((p) => p.seek(masterPos)));
-          await Future.delayed(const Duration(milliseconds: 100));
-        }
-      } catch (_) {}
-    }
-
-    // 3. Dispara todos os players simultaneamente
-    await Future.wait(_stemPlayers.values.map((p) => p.resume()));
-    await Future.delayed(const Duration(milliseconds: 60));
-
-    // 4. Libera volumes e pans reais com o hardware já emitindo áudio em fase
     await _applyAllStemsAudioSettings();
-
     _startPlaybackClock();
-    _startDriftCompensation();
     notifyListeners();
   }
 
@@ -626,15 +591,18 @@ class AudioEngine extends ChangeNotifier {
     _isLoadingAudio = true;
     _isPlaying = true;
     _loadingProgress = 0.0;
-    _loadingStatus = 'Preparando faixas...';
+    _loadingStatus = 'Preparando faixas no motor de áudio SoLoud...';
     notifyListeners();
 
     try {
       WakelockPlus.enable();
 
-      // GARANTIA TOTAL DE SINCRONISMO (WEB E DISPOSITIVOS MÓVEIS):
+      if (!SoLoud.instance.isInitialized) {
+        await SoLoud.instance.init();
+      }
+
+      // GARANTIA TOTAL DE SINCRONISMO:
       // Garante que 100% das faixas estão em cache permanente no Android/iOS ou em RAM no Web.
-      // Isso elimina os limites de 6 conexões HTTP simultâneas do navegador e oscilações do Android.
       final isCached = await AudioCacheService.isSongFullyCached(song);
       if (!isCached) {
         _loadingStatus = kIsWeb
@@ -655,9 +623,8 @@ class AudioEngine extends ChangeNotifier {
         );
       }
 
-      // 1. Inicializa os players se ainda não existirem
-      if (_stemPlayers.isEmpty) {
-        // Identifica pista master (preferência: CLICK com arquivo, senão GUIA com arquivo, senão primeira com arquivo)
+      // 1. Carrega todas as fontes no SoLoud se ainda não carregadas
+      if (_stemSources.isEmpty) {
         final masterStem = song.stems.firstWhere(
           (s) => s.name.toUpperCase().contains('CLICK') && (s.filePath?.isNotEmpty ?? false),
           orElse: () => song.stems.firstWhere(
@@ -670,172 +637,89 @@ class AudioEngine extends ChangeNotifier {
         );
         _masterStemId = masterStem.id;
 
-        // Inicializa todas as faixas com tratamento individual para nenhuma travar as outras
-        final List<Future<void>> initTasks = [];
+        final List<Future<void>> loadTasks = [];
 
         for (final stem in song.stems) {
           if (stem.filePath == null || stem.filePath!.isEmpty) continue;
 
-          initTasks.add(() async {
+          loadTasks.add(() async {
             try {
-              final player = AudioPlayer();
-
-              // Configura contexto sem roubo de foco de áudio por pista (fundamental no Android)
-              try {
-                await player.setAudioContext(
-                  AudioContextConfig(
-                    focus: AudioContextConfigFocus.mixWithOthers,
-                    stayAwake: true,
-                  ).build(),
-                );
-              } catch (_) {}
-
-              try {
-                await player.setReleaseMode(ReleaseMode.stop);
-              } catch (_) {}
-
-              Source source;
+              AudioSource source;
               if (kIsWeb) {
                 final webBytes = AudioCacheService.getWebBytes(stem.filePath!);
                 if (webBytes != null) {
-                  final pathLower = stem.filePath!.toLowerCase();
-                  String mimeType = 'audio/mpeg';
-                  if (pathLower.endsWith('.m4a') || pathLower.endsWith('.mp4') || pathLower.endsWith('.aac')) {
-                    mimeType = 'audio/mp4';
-                  } else if (pathLower.endsWith('.wav')) {
-                    mimeType = 'audio/wav';
-                  } else if (pathLower.endsWith('.ogg')) {
-                    mimeType = 'audio/ogg';
-                  }
-                  source = BytesSource(webBytes, mimeType: mimeType);
+                  source = await SoLoud.instance.loadMem(
+                    stem.name,
+                    webBytes,
+                    mode: LoadMode.memory,
+                  );
                 } else {
                   final url = SupabaseService.getAudioUrl(stem.filePath!);
-                  source = UrlSource(url);
+                  source = await SoLoud.instance.loadUrl(url, mode: LoadMode.memory);
                 }
               } else {
                 final localPath = await AudioCacheService.getLocalPathIfExists(stem.filePath!);
                 if (localPath != null) {
-                  source = DeviceFileSource(localPath);
+                  source = await SoLoud.instance.loadFile(localPath, mode: LoadMode.memory);
                 } else {
                   final url = SupabaseService.getAudioUrl(stem.filePath!);
-                  source = UrlSource(url);
+                  source = await SoLoud.instance.loadUrl(url, mode: LoadMode.memory);
                 }
               }
 
-              // Timeout de segurança para evitar travamento se uma pista demorar
-              await player.setSource(source).timeout(const Duration(seconds: 15));
-
-              // MUTE-START-ALIGN: Volume inicia em zero absoluto durante preenchimento de buffer
-              await player.setVolume(0.0);
+              _stemSources[stem.id] = source;
 
               try {
-                await player.setBalance(stem.pan);
-              } catch (_) {}
-
-              _stemPlayers[stem.id] = player;
-              _stemPlaybackRates[stem.id] = 1.0;
-
-              // Duração da música: atualiza conforme as faixas carregam
-              player.onDurationChanged.listen((dur) {
-                if (dur.inMilliseconds > 0) {
-                  final durSec = dur.inMilliseconds / 1000.0;
-                  if (durSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
-                    _totalDurationSeconds = durSec;
-                    notifyListeners();
-                  }
+                final len = SoLoud.instance.getLength(source);
+                final lenSec = len.inMilliseconds / 1000.0;
+                if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
+                  _totalDurationSeconds = lenSec;
                 }
-              });
-
-              // Apenas o master escuta position para evitar sobrecarga de rebuilds
-              if (stem.id == _masterStemId) {
-                player.onPositionChanged.listen((pos) {
-                  final millis = pos.inMilliseconds;
-                  _lastPositionUpdateMillis = DateTime.now().millisecondsSinceEpoch;
-                  _currentPositionSeconds = millis / 1000.0;
-                  _updateMusicalGrid();
-
-                  if ((millis - _lastNotifiedMillis).abs() >= 250) {
-                    _lastNotifiedMillis = millis;
-                    notifyListeners();
-                  }
-                });
-
-                player.onPlayerComplete.listen((_) {
-                  // Só encerra se a música realmente tiver chegado ao final
-                  if (_currentPositionSeconds >= (_totalDurationSeconds - 2.0)) {
-                    stop();
-                  }
-                });
-              }
+              } catch (_) {}
             } catch (stemErr) {
-              debugPrint('Aviso: Pista ${stem.name} não pôde ser inicializada: $stemErr');
+              debugPrint('Aviso: Pista ${stem.name} não pôde ser carregada no SoLoud: $stemErr');
             }
           }());
         }
 
-        await Future.wait(initTasks);
+        await Future.wait(loadTasks);
       }
 
-      if (_stemPlayers.isEmpty) {
-        // Fallback simulador se não houver áudios válidos
+      if (_stemSources.isEmpty) {
         _startPlaybackClock();
       } else {
-        // MUTE-START-ALIGN (Disparo com barreira de hardware e alinhamento de amostras)
-        final seekPos = _currentPositionSeconds > 0.08
-            ? Duration(milliseconds: (_currentPositionSeconds * 1000).toInt())
-            : Duration.zero;
+        // DISPARO SIMULTÂNEO NA ENGINE C++ (SAMPLE-ACCURATE):
+        _stemHandles.clear();
 
-        // 1. Alinha todos os decodificadores na posição alvo com volume zerado
-        await Future.wait(_stemPlayers.values.map((p) => p.seek(seekPos)));
+        // Agenda todas as vozes para iniciarem no mesmo instante de relógio da engine
+        final atTime = SoLoud.instance.getEngineTime() + const Duration(milliseconds: 30);
 
-        // 2. Barreira de pré-rolagem de 120ms para preenchimento de buffer no hardware
-        await Future.delayed(const Duration(milliseconds: 120));
+        for (final stem in song.stems) {
+          final source = _stemSources[stem.id];
+          if (source == null) continue;
 
-        // 3. Disparo nativo simultâneo
-        await Future.wait(_stemPlayers.values.map((p) => p.resume()));
+          final effVol = stem.getEffectiveVolume(hasActiveSolo);
+          final handle = SoLoud.instance.playScheduled(
+            source,
+            atTime,
+            volume: effVol,
+            pan: stem.pan,
+          );
 
-        // 4. Aguarda 60ms para emissão dos primeiros relógios de hardware
-        await Future.delayed(const Duration(milliseconds: 60));
+          if (_currentPositionSeconds > 0.08) {
+            SoLoud.instance.seek(
+              handle,
+              Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()),
+            );
+          }
 
-        // 5. Verificação imediata pós-partida: se alguma pista teve atraso na inicialização
-        if (_stemPlayers.containsKey(_masterStemId)) {
-          try {
-            final masterPos = await _stemPlayers[_masterStemId]!.getCurrentPosition();
-            if (masterPos != null && masterPos.inMilliseconds > 0) {
-              final mMillis = masterPos.inMilliseconds;
-              final alignTasks = <Future<void>>[];
-              for (final entry in _stemPlayers.entries) {
-                if (entry.key == _masterStemId) continue;
-                alignTasks.add(() async {
-                  try {
-                    final trackPos = await entry.value.getCurrentPosition();
-                    if (trackPos != null) {
-                      final diff = (trackPos.inMilliseconds - mMillis).abs();
-                      if (diff > 25) {
-                        await entry.value.seek(masterPos);
-                      }
-                    }
-                  } catch (_) {}
-                }());
-              }
-              if (alignTasks.isNotEmpty) {
-                await Future.wait(alignTasks);
-              }
-            }
-          } catch (_) {}
+          _stemHandles[stem.id] = handle;
         }
 
-        // 6. Restaura todos os volumes e balanços (PAN) com áudio já em sincronismo total
-        await _applyAllStemsAudioSettings();
-
-        // Inicia relógio de reprodução com watchdog de avanço
         _startPlaybackClock();
-
-        // Inicia o monitor de PLL de sincronismo contínuo
-        _startDriftCompensation();
       }
     } catch (e) {
-      debugPrint('Erro ao iniciar áudio: $e');
+      debugPrint('Erro ao iniciar áudio com SoLoud: $e');
       _startPlaybackClock();
     } finally {
       _isLoadingAudio = false;
@@ -852,119 +736,33 @@ class AudioEngine extends ChangeNotifier {
     _currentBeat = (totalBeats % 4) + 1;
   }
 
-  /// Monitor PLL (Phase-Locked Loop) de sincronismo contínuo:
-  /// Ao invés de usar seek() abrupto a cada oscilação de buffer (o que causa estalos e silêncio),
-  /// o PLL analisa a defasagem a cada 350ms e faz micro-ajustes na velocidade (playbackRate)
-  /// de ±4% (1.04x se atrasada, 0.96x se adiantada).
-  /// O ouvido humano não percebe qualquer alteração de pitch ou andamento, e em menos de 300ms
-  /// as pistas entram em sincronismo perfeito de amostras.
-  void _startDriftCompensation() {
-    _driftCheckTimer?.cancel();
-    _driftCheckTimer = Timer.periodic(const Duration(milliseconds: 350), (_) async {
-      if (!_isPlaying || _stemPlayers.isEmpty) return;
-
-      final masterPlayer = _stemPlayers[_masterStemId];
-      if (masterPlayer == null) return;
-
-      int? masterMillis;
-      try {
-        final pos = await masterPlayer.getCurrentPosition();
-        if (pos != null) {
-          masterMillis = pos.inMilliseconds;
-        }
-      } catch (_) {}
-
-      if (masterMillis == null || masterMillis < 250) return;
-
-      final now = DateTime.now().millisecondsSinceEpoch;
-
-      for (final entry in _stemPlayers.entries) {
-        if (entry.key == _masterStemId) continue;
-
-        final player = entry.value;
-
-        try {
-          final pos = await player.getCurrentPosition();
-          if (pos == null) continue;
-
-          final trackMillis = pos.inMilliseconds;
-          final diff = trackMillis - masterMillis; // positivo = adiantada, negativo = atrasada
-          final absDiff = diff.abs();
-
-          final currentRate = _stemPlaybackRates[entry.key] ?? 1.0;
-
-          if (absDiff <= 18) {
-            // Sincronismo perfeito dentro do limiar de percepção humana (<18ms)
-            if (currentRate != 1.0) {
-              await player.setPlaybackRate(1.0);
-              _stemPlaybackRates[entry.key] = 1.0;
-            }
-          } else if (absDiff > 250) {
-            // Desvio severo (ex: app em background suspenso): alinhamento direto
-            final lastSeek = _lastStemSeekTimes[entry.key] ?? 0;
-            if (now - lastSeek > 3000) {
-              _lastStemSeekTimes[entry.key] = now;
-              await player.seek(Duration(milliseconds: masterMillis));
-              if (currentRate != 1.0) {
-                await player.setPlaybackRate(1.0);
-                _stemPlaybackRates[entry.key] = 1.0;
-              }
-            }
-          } else {
-            // PLL NUDGE SUAVE (18ms < absDiff <= 250ms):
-            if (diff < 0) {
-              // Pista está ATRASADA -> acelera levemente (+4%) para alcançar o master
-              if (currentRate != 1.04) {
-                await player.setPlaybackRate(1.04);
-                _stemPlaybackRates[entry.key] = 1.04;
-              }
-            } else {
-              // Pista está ADIANTADA -> desacelera levemente (-4%) para aguardar o master
-              if (currentRate != 0.96) {
-                await player.setPlaybackRate(0.96);
-                _stemPlaybackRates[entry.key] = 0.96;
-              }
-            }
-          }
-        } catch (_) {}
-      }
-    });
-  }
-
   Future<void> _pausePlayback() async {
     _isPlaying = false;
-    _driftCheckTimer?.cancel();
     _playbackTicker?.cancel();
-    _resetAllPlaybackRates();
     WakelockPlus.disable();
 
-    final pauseFutures = _stemPlayers.values.map((p) async {
+    for (final handle in _stemHandles.values) {
       try {
-        await p.pause();
+        SoLoud.instance.setPause(handle, true);
       } catch (_) {}
-    });
-    await Future.wait(pauseFutures);
+    }
     notifyListeners();
   }
 
   void stop() {
     _isPlaying = false;
-    _driftCheckTimer?.cancel();
     _playbackTicker?.cancel();
-    _resetAllPlaybackRates();
     _currentPositionSeconds = 0.0;
     _currentBar = 1;
     _currentBeat = 1;
     _lastPositionUpdateMillis = 0;
     WakelockPlus.disable();
 
-    // Mantém players em estado Pausado na posição zero (evita IllegalStateException no Android)
-    for (final player in _stemPlayers.values) {
-      try {
-        player.pause();
-        player.seek(Duration.zero);
-      } catch (_) {}
-    }
+    try {
+      SoLoud.instance.stopAll();
+    } catch (_) {}
+    _stemHandles.clear();
+
     notifyListeners();
   }
 
@@ -1007,7 +805,30 @@ class AudioEngine extends ChangeNotifier {
       song.pitchOffsetSemitones = _pitchOffset;
       song.currentKey = PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
     }
+    _applyPitchOffsetToAudio();
     notifyListeners();
+  }
+
+  void _applyPitchOffsetToAudio() {
+    try {
+      if (!SoLoud.instance.isInitialized) return;
+
+      if (_pitchOffset == 0) {
+        if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
+          SoLoud.instance.filters.pitchShiftFilter.deactivate();
+        }
+      } else {
+        if (!SoLoud.instance.filters.pitchShiftFilter.isActive) {
+          SoLoud.instance.filters.pitchShiftFilter.activate();
+        }
+        final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
+        try {
+          SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Aviso ao aplicar pitchShiftFilter no SoLoud: $e');
+    }
   }
 
   void setTargetKey(String newKey) {
@@ -1110,27 +931,19 @@ class AudioEngine extends ChangeNotifier {
   // CONTROLE DE VOLUME, MUTE, SOLO E PAN (UNIFICADO E PROTEGIDO)
   // ==========================================
 
-  /// Aplica volume e balanço (PAN) com proteção nativa Android/iOS
+  /// Aplica volume e balanço (PAN) diretamente no mixer SoLoud C++
   Future<void> _applyStemAudioSettings(StemTrack stem) async {
-    final player = _stemPlayers[stem.id];
-    if (player == null) return;
+    final handle = _stemHandles[stem.id];
+    if (handle == null) return;
 
     final anySolo = hasActiveSolo;
     final effVol = stem.getEffectiveVolume(anySolo);
 
     try {
-      // 1. Aplica o volume efetivo considerando Solo e Mute
-      await player.setVolume(effVol);
-
-      // 2. CRUCIAL NO ANDROID E IOS:
-      // O MediaPlayer do Android reseta o balanço (L/R) para (v, v) sempre que setVolume é chamado.
-      // Reaplicar setBalance imediatamente após setVolume garante que o PAN (Cabo Y ou customizado)
-      // seja rigorosamente mantido no hardware!
-      try {
-        await player.setBalance(stem.pan);
-      } catch (_) {}
+      SoLoud.instance.setVolume(handle, effVol);
+      SoLoud.instance.setPan(handle, stem.pan);
     } catch (e) {
-      debugPrint('Erro ao aplicar configurações de áudio na pista ${stem.name}: $e');
+      debugPrint('Erro ao aplicar volume/pan na pista ${stem.name} no SoLoud: $e');
     }
   }
 
@@ -1142,17 +955,15 @@ class AudioEngine extends ChangeNotifier {
     final anySolo = hasActiveSolo;
 
     for (final stem in song.stems) {
-      final player = _stemPlayers[stem.id];
-      if (player == null) continue;
+      final handle = _stemHandles[stem.id];
+      if (handle == null) continue;
 
       final effVol = stem.getEffectiveVolume(anySolo);
       try {
-        await player.setVolume(effVol);
-        try {
-          await player.setBalance(stem.pan);
-        } catch (_) {}
+        SoLoud.instance.setVolume(handle, effVol);
+        SoLoud.instance.setPan(handle, stem.pan);
       } catch (e) {
-        debugPrint('Erro ao aplicar volume/pan em ${stem.name}: $e');
+        debugPrint('Erro ao aplicar volume/pan em ${stem.name} no SoLoud: $e');
       }
     }
   }
@@ -1261,48 +1072,48 @@ class AudioEngine extends ChangeNotifier {
     _updateMusicalGrid();
     notifyListeners();
 
-    if (_stemPlayers.isEmpty) return;
+    if (_stemHandles.isEmpty) return;
 
     final target = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
-    final wasPlaying = _isPlaying;
-
-    if (wasPlaying) {
-      // Muta temporariamente durante o seek para evitar estalos de decodificador
-      for (final player in _stemPlayers.values) {
-        try {
-          await player.setVolume(0.0);
-        } catch (_) {}
-      }
-    }
-
-    await Future.wait(_stemPlayers.values.map((p) async {
+    for (final handle in _stemHandles.values) {
       try {
-        await p.seek(target);
+        SoLoud.instance.seek(handle, target);
       } catch (_) {}
-    }));
-
-    if (wasPlaying) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      await Future.wait(_stemPlayers.values.map((p) async {
-        try {
-          await p.resume();
-        } catch (_) {}
-      }));
-      await Future.delayed(const Duration(milliseconds: 50));
-      await _applyAllStemsAudioSettings();
     }
   }
 
-  /// Relógio de reprodução com watchdog de avanço para garantir sincronismo
+  /// Relógio de alta precisão conectado diretamente à posição do mixer SoLoud C++
   void _startPlaybackClock() {
     _playbackTicker?.cancel();
-    _playbackTicker = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+    _playbackTicker = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!_isPlaying) return;
 
+      if (_masterStemId != null && _stemHandles.containsKey(_masterStemId)) {
+        try {
+          final handle = _stemHandles[_masterStemId]!;
+          final pos = SoLoud.instance.getPosition(handle);
+          final posSec = pos.inMilliseconds / 1000.0;
+          if (posSec >= 0) {
+            _currentPositionSeconds = posSec;
+            _lastPositionUpdateMillis = DateTime.now().millisecondsSinceEpoch;
+            _updateMusicalGrid();
+
+            if ((pos.inMilliseconds - _lastNotifiedMillis).abs() >= 200) {
+              _lastNotifiedMillis = pos.inMilliseconds;
+              notifyListeners();
+            }
+
+            if (_currentPositionSeconds >= (_totalDurationSeconds - 0.5) && _totalDurationSeconds > 5.0) {
+              stop();
+            }
+            return;
+          }
+        } catch (_) {}
+      }
+
       final now = DateTime.now().millisecondsSinceEpoch;
-      // Se não há players nativos ou se o player nativo não emitiu posição recente (> 1000ms)
-      if (_stemPlayers.isEmpty || (now - _lastPositionUpdateMillis > 1000)) {
-        _currentPositionSeconds += 0.2;
+      if (now - _lastPositionUpdateMillis > 500) {
+        _currentPositionSeconds += 0.1;
         if (_currentPositionSeconds >= _totalDurationSeconds) {
           stop();
           return;
@@ -1333,7 +1144,6 @@ class AudioEngine extends ChangeNotifier {
   void dispose() {
     _realtimeChannel?.unsubscribe();
     _cloudSyncTimer?.cancel();
-    _driftCheckTimer?.cancel();
     _disposeStemPlayers();
     _playbackTicker?.cancel();
     WakelockPlus.disable();

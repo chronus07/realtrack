@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import 'services/audio_engine.dart';
 import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
@@ -15,16 +15,14 @@ import 'services/update_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Configuração global de áudio: Permite reproduzir 16+ pistas simultâneas sem conflito de foco no Android/iOS
+  // Inicializa o motor de áudio C++ SoLoud de alta performance e baixa latência
   try {
-    await AudioPlayer.global.setAudioContext(
-      AudioContextConfig(
-        focus: AudioContextConfigFocus.mixWithOthers,
-        stayAwake: true,
-      ).build(),
-    );
+    if (!SoLoud.instance.isInitialized) {
+      await SoLoud.instance.init();
+      debugPrint('SoLoud C++ Audio Engine inicializado com sucesso.');
+    }
   } catch (e) {
-    debugPrint('Configuração global de AudioContext: $e');
+    debugPrint('Aviso ao inicializar SoLoud: $e');
   }
 
   try {
