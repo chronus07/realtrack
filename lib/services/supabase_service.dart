@@ -48,16 +48,18 @@ class SupabaseService {
       final List<Song> songs = [];
       for (var row in response) {
         final stemsRaw = row['song_stems'] as List? ?? [];
+        final bool isMulti = stemsRaw.length > 1 || (row['is_multitrack'] ?? true);
         final List<StemTrack> stems = stemsRaw.map<StemTrack>((st) {
+          final bool isCue = st['is_cue'] ?? false;
           return StemTrack(
             id: st['id'] ?? '',
             name: st['name'] ?? '',
-            isCue: st['is_cue'] ?? false,
+            isCue: isCue,
             filePath: st['storage_path'],
+            pan: !isMulti ? 0.0 : (isCue ? -1.0 : 1.0),
+            outputChannel: !isMulti ? OutputChannel.stereo : (isCue ? OutputChannel.left : OutputChannel.right),
           );
         }).toList();
-
-        final bool isMulti = stems.length > 1 || (row['is_multitrack'] ?? true);
 
         songs.add(
           Song(
@@ -156,6 +158,8 @@ class SupabaseService {
             name: item.name,
             isCue: item.isCue,
             filePath: storagePath,
+            pan: !isMultiTrack ? 0.0 : (item.isCue ? -1.0 : 1.0),
+            outputChannel: !isMultiTrack ? OutputChannel.stereo : (item.isCue ? OutputChannel.left : OutputChannel.right),
           ),
         );
       }
@@ -272,12 +276,16 @@ class SupabaseService {
             seenSongIds.add(sId);
 
             final stemsRaw = songData['song_stems'] as List? ?? [];
+            final bool isMulti = stemsRaw.length > 1 || (songData['is_multitrack'] ?? true);
             final List<StemTrack> stems = stemsRaw.map<StemTrack>((st) {
+              final bool isCue = st['is_cue'] ?? false;
               return StemTrack(
                 id: st['id'] ?? '',
                 name: st['name'] ?? '',
-                isCue: st['is_cue'] ?? false,
+                isCue: isCue,
                 filePath: st['storage_path'],
+                pan: !isMulti ? 0.0 : (isCue ? -1.0 : 1.0),
+                outputChannel: !isMulti ? OutputChannel.stereo : (isCue ? OutputChannel.left : OutputChannel.right),
               );
             }).toList();
 

@@ -25,7 +25,7 @@ class StemTrack {
     this.isSolo = false,
     OutputChannel? outputChannel,
     double? pan,
-  })  : outputChannel = outputChannel ?? (isCue ? OutputChannel.left : OutputChannel.right),
+  })  : outputChannel = outputChannel ?? (isCue ? OutputChannel.left : (pan == 0.0 ? OutputChannel.stereo : OutputChannel.right)),
         pan = pan ?? (isCue ? -1.0 : 1.0);
 
   // Calcula o volume real considerando Solo e Mute

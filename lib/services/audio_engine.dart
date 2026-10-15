@@ -373,7 +373,14 @@ class AudioEngine extends ChangeNotifier {
     final found = _allSetlists.firstWhere((s) => s.id == id, orElse: () => _allSetlists.first);
     _currentSetlist = found;
     _currentSongIndex = 0;
+    if (found.songs.isNotEmpty && (!found.songs[0].isMultiTrack || found.songs[0].stems.length <= 1)) {
+      for (final stem in found.songs[0].stems) {
+        stem.setPan(0.0);
+      }
+    }
     _pitchOffset = found.songs.isNotEmpty ? found.songs[0].pitchOffsetSemitones : 0;
+    _totalDurationSeconds = 0.0;
+    _currentPositionSeconds = 0.0;
     _isPlaying = false;
     _playbackTicker?.cancel();
     _disposeStemPlayers();
@@ -532,6 +539,8 @@ class AudioEngine extends ChangeNotifier {
     }
     _stemSources.clear();
     _masterStemId = null;
+    _totalDurationSeconds = 0.0;
+    _currentPositionSeconds = 0.0;
 
     // Libera a memória RAM do navegador de todos os bytes temporários
     AudioCacheService.clearAllWebBytes();
@@ -624,6 +633,17 @@ class AudioEngine extends ChangeNotifier {
     try {
       WakelockPlus.enable();
 
+      // Regra Single Track: quando for faixa única, o pan deve ser 100% Centro (C / 0.0)
+      final bool isSingleTrack = !song.isMultiTrack || song.stems.length <= 1;
+      if (isSingleTrack) {
+        for (final stem in song.stems) {
+          stem.setPan(0.0);
+        }
+      }
+
+      // Reinicia o cálculo de duração total para a música atual
+      _totalDurationSeconds = 0.0;
+
       if (!SoLoud.instance.isInitialized) {
         await SoLoud.instance.init();
       }
@@ -642,6 +662,20 @@ class AudioEngine extends ChangeNotifier {
         }
         return false;
       });
+
+      // Calcula a duração a partir das fontes que já estão em memória para esta música
+      for (final stem in song.stems) {
+        final existingSrc = _stemSources[stem.id];
+        if (existingSrc != null) {
+          try {
+            final len = SoLoud.instance.getLength(existingSrc);
+            final lenSec = len.inMilliseconds / 1000.0;
+            if (lenSec > _totalDurationSeconds) {
+              _totalDurationSeconds = lenSec;
+            }
+          } catch (_) {}
+        }
+      }
 
       // Identifica a faixa master (Click ou Guia) para ser a referência de clock
       final masterStem = song.stems.firstWhere(
@@ -701,9 +735,9 @@ class AudioEngine extends ChangeNotifier {
 
           // REGRA DE ARQUITETURA DE ÁUDIO REALTRACKS:
           // 1. No Web: usa LoadMode.memory via loadMem.
-          // 2. No Nativo (Android/iOS): se for MP3, WAV, FLAC ou OGG, usa LoadMode.disk (streaming com ring buffer, <1MB RAM por faixa).
-          // Se for M4A ou se LoadMode.disk falhar, faz fallback automático para LoadMode.memory.
-          final preferredMode = (kIsWeb || isIsoContainer) ? LoadMode.memory : LoadMode.disk;
+          // 2. Se for Single Track ou M4A/AAC: usa LoadMode.memory (áudio completo em buffer, sem falhas de decodificação).
+          // 3. No Nativo (Android/iOS) para multitracks com múltiplos stems: usa LoadMode.disk para streaming ring buffer.
+          final preferredMode = (kIsWeb || isIsoContainer || isSingleTrack) ? LoadMode.memory : LoadMode.disk;
 
           for (int attempt = 1; attempt <= 2 && source == null; attempt++) {
             try {
@@ -711,7 +745,7 @@ class AudioEngine extends ChangeNotifier {
                 var webBytes = AudioCacheService.getWebBytes(filePath);
                 if (webBytes == null) {
                   final url = SupabaseService.getAudioUrl(filePath);
-                  final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 35));
+                  final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 120));
                   if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
                     webBytes = res.bodyBytes;
                   }
@@ -723,7 +757,6 @@ class AudioEngine extends ChangeNotifier {
                     webBytes,
                     mode: LoadMode.memory,
                   );
-                  // Desaloca imediatamente a cópia em bytes da memória JS para não inflar heap
                   AudioCacheService.evictWebBytes(filePath);
                 } else {
                   lastError = 'Download Web retornou vazio';
@@ -743,18 +776,18 @@ class AudioEngine extends ChangeNotifier {
                   try {
                     source = await SoLoud.instance.loadFile(localPath, mode: preferredMode);
                   } catch (loadErr) {
-                    if (preferredMode == LoadMode.disk) {
-                      debugPrint('LoadMode.disk não aceito para ${stem.name}, usando LoadMode.memory: $loadErr');
+                    debugPrint('preferredMode falhou para ${stem.name}, usando fallback LoadMode.memory: $loadErr');
+                    try {
                       source = await SoLoud.instance.loadFile(localPath, mode: LoadMode.memory);
-                    } else {
-                      rethrow;
+                    } catch (memErr) {
+                      lastError = 'Falha ao carregar arquivo local: $memErr';
                     }
                   }
                 } else {
-                  // Fallback pela URL
+                  // Fallback pela URL usando LoadMode.memory seguro
                   final url = SupabaseService.getAudioUrl(filePath);
-                  if (isIsoContainer) {
-                    final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 35));
+                  try {
+                    final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 120));
                     if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
                       source = await SoLoud.instance.loadMem(
                         uniqueRefName,
@@ -762,8 +795,8 @@ class AudioEngine extends ChangeNotifier {
                         mode: LoadMode.memory,
                       );
                     }
-                  } else {
-                    source = await SoLoud.instance.loadUrl(url, mode: preferredMode);
+                  } catch (netErr) {
+                    lastError = 'Fallback URL falhou: $netErr';
                   }
                 }
               }
@@ -773,7 +806,7 @@ class AudioEngine extends ChangeNotifier {
                 try {
                   final len = SoLoud.instance.getLength(source);
                   final lenSec = len.inMilliseconds / 1000.0;
-                  if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
+                  if (lenSec > _totalDurationSeconds) {
                     _totalDurationSeconds = lenSec;
                   }
                 } catch (_) {}
@@ -795,6 +828,10 @@ class AudioEngine extends ChangeNotifier {
           // Intervalo de 30ms para o Garbage Collector desalocar objetos temporários
           await Future.delayed(const Duration(milliseconds: 30));
         }
+      }
+
+      if (_totalDurationSeconds <= 0.0) {
+        _totalDurationSeconds = 240.0;
       }
 
       if (_stemSources.isEmpty) {
@@ -918,7 +955,14 @@ class AudioEngine extends ChangeNotifier {
       _disposeStemPlayers();
       _currentSongIndex++;
       final song = _currentSetlist!.songs[_currentSongIndex];
+      if (!song.isMultiTrack || song.stems.length <= 1) {
+        for (final stem in song.stems) {
+          stem.setPan(0.0);
+        }
+      }
       _pitchOffset = song.pitchOffsetSemitones;
+      _totalDurationSeconds = 0.0;
+      _currentPositionSeconds = 0.0;
       stop();
       _applyPitchOffsetToAudio();
       notifyListeners();
@@ -932,7 +976,14 @@ class AudioEngine extends ChangeNotifier {
       final song = _currentSetlist != null && _currentSongIndex < _currentSetlist!.songs.length
           ? _currentSetlist!.songs[_currentSongIndex]
           : null;
+      if (song != null && (!song.isMultiTrack || song.stems.length <= 1)) {
+        for (final stem in song.stems) {
+          stem.setPan(0.0);
+        }
+      }
       _pitchOffset = song?.pitchOffsetSemitones ?? 0;
+      _totalDurationSeconds = 0.0;
+      _currentPositionSeconds = 0.0;
       stop();
       _applyPitchOffsetToAudio();
       notifyListeners();
@@ -944,7 +995,14 @@ class AudioEngine extends ChangeNotifier {
       _disposeStemPlayers();
       _currentSongIndex = index;
       final song = _currentSetlist!.songs[index];
+      if (!song.isMultiTrack || song.stems.length <= 1) {
+        for (final stem in song.stems) {
+          stem.setPan(0.0);
+        }
+      }
       _pitchOffset = song.pitchOffsetSemitones;
+      _totalDurationSeconds = 0.0;
+      _currentPositionSeconds = 0.0;
       stop();
       _applyPitchOffsetToAudio();
       notifyListeners();
@@ -1165,14 +1223,29 @@ class AudioEngine extends ChangeNotifier {
     _disposeStemPlayers();
     stop();
 
+    _totalDurationSeconds = 0.0;
+    _currentPositionSeconds = 0.0;
     _pitchOffset = 0;
+
+    final bool isSingle = !librarySong.isMultiTrack || librarySong.stems.length <= 1;
+    if (isSingle) {
+      for (final stem in librarySong.stems) {
+        stem.setPan(0.0);
+      }
+    }
 
     // Se já estiver na playlist atual, apenas seleciona
     if (_currentSetlist != null) {
       final existingIndex = _currentSetlist!.songs.indexWhere((s) => s.id == librarySong.id);
       if (existingIndex != -1) {
         _currentSongIndex = existingIndex;
-        _pitchOffset = _currentSetlist!.songs[existingIndex].pitchOffsetSemitones;
+        final existingSong = _currentSetlist!.songs[existingIndex];
+        if (isSingle) {
+          for (final stem in existingSong.stems) {
+            stem.setPan(0.0);
+          }
+        }
+        _pitchOffset = existingSong.pitchOffsetSemitones;
         _applyPitchOffsetToAudio();
         notifyListeners();
         return;
@@ -1184,6 +1257,11 @@ class AudioEngine extends ChangeNotifier {
       currentKey: librarySong.originalKey,
       pitchOffsetSemitones: 0,
     );
+    if (isSingle) {
+      for (final stem in cloned.stems) {
+        stem.setPan(0.0);
+      }
+    }
 
     if (_currentSetlist == null) {
       _currentSetlist = Setlist(
@@ -1272,8 +1350,15 @@ class AudioEngine extends ChangeNotifier {
     final song = currentSong;
     if (song == null) return;
 
-    for (final stem in song.stems) {
-      stem.setPan(stem.isCue ? -1.0 : 1.0);
+    if (!song.isMultiTrack || song.stems.length <= 1) {
+      // Single track permanece sempre no Centro (0.0 / C)
+      for (final stem in song.stems) {
+        stem.setPan(0.0);
+      }
+    } else {
+      for (final stem in song.stems) {
+        stem.setPan(stem.isCue ? -1.0 : 1.0);
+      }
     }
     _applyAllStemsAudioSettings();
     notifyListeners();

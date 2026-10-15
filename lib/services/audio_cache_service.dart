@@ -159,7 +159,7 @@ class AudioCacheService {
 
         client = http.Client();
         final request = http.Request('GET', Uri.parse(url));
-        final response = await client.send(request).timeout(const Duration(seconds: 40));
+        final response = await client.send(request).timeout(const Duration(seconds: 120));
 
         if (response.statusCode == 200) {
           final totalBytes = response.contentLength ?? 0;
@@ -249,7 +249,7 @@ class AudioCacheService {
           attempts++;
           try {
             final url = SupabaseService.getAudioUrl(stem.filePath!);
-            final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+            final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 120));
             if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
               _webCache[stem.filePath!] = res.bodyBytes;
               success = true;
