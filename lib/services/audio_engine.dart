@@ -377,6 +377,7 @@ class AudioEngine extends ChangeNotifier {
     _isPlaying = false;
     _playbackTicker?.cancel();
     _disposeStemPlayers();
+    _applyPitchOffsetToAudio();
     notifyListeners();
   }
 
@@ -482,6 +483,7 @@ class AudioEngine extends ChangeNotifier {
     _currentSetlist = setlist;
     _currentSongIndex = 0;
     _pitchOffset = (setlist.songs.isNotEmpty) ? setlist.songs[0].pitchOffsetSemitones : 0;
+    _applyPitchOffsetToAudio();
     notifyListeners();
   }
 
@@ -501,6 +503,7 @@ class AudioEngine extends ChangeNotifier {
     song.currentKey = PitchShifterService.transposeNote(song.originalKey, song.pitchOffsetSemitones);
     if (songIndex == _currentSongIndex) {
       _pitchOffset = song.pitchOffsetSemitones;
+      _applyPitchOffsetToAudio();
     }
     notifyListeners();
     SupabaseService.saveSetlistToCloud(_currentSetlist!);
@@ -518,6 +521,11 @@ class AudioEngine extends ChangeNotifier {
     _stemHandles.clear();
 
     for (final source in _stemSources.values) {
+      try {
+        if (!kIsWeb && source.filters.pitchShiftFilter.isActive) {
+          source.filters.pitchShiftFilter.deactivate();
+        }
+      } catch (_) {}
       try {
         SoLoud.instance.disposeSource(source);
       } catch (_) {}
@@ -560,6 +568,7 @@ class AudioEngine extends ChangeNotifier {
     }
 
     await _applyAllStemsAudioSettings();
+    _applyPitchOffsetToAudio();
     _startPlaybackClock();
     notifyListeners();
   }
@@ -803,6 +812,15 @@ class AudioEngine extends ChangeNotifier {
           final source = _stemSources[stem.id];
           if (source == null) continue;
 
+          // Pré-ativa o filtro no AudioSource antes do play para instrumentos se houver transposição
+          if (!kIsWeb && _pitchOffset != 0 && !stem.isCue) {
+            try {
+              if (!source.filters.pitchShiftFilter.isActive) {
+                source.filters.pitchShiftFilter.activate();
+              }
+            } catch (_) {}
+          }
+
           final effVol = stem.getEffectiveVolume(hasActiveSolo);
           final handle = SoLoud.instance.play(
             source,
@@ -844,6 +862,7 @@ class AudioEngine extends ChangeNotifier {
           } catch (_) {}
         }
 
+        _applyPitchOffsetToAudio();
         _startPlaybackClock();
       }
     } catch (e) {
@@ -898,8 +917,11 @@ class AudioEngine extends ChangeNotifier {
     if (_currentSetlist != null && _currentSongIndex < _currentSetlist!.songs.length - 1) {
       _disposeStemPlayers();
       _currentSongIndex++;
-      _pitchOffset = 0;
+      final song = _currentSetlist!.songs[_currentSongIndex];
+      _pitchOffset = song.pitchOffsetSemitones;
       stop();
+      _applyPitchOffsetToAudio();
+      notifyListeners();
     }
   }
 
@@ -907,8 +929,13 @@ class AudioEngine extends ChangeNotifier {
     if (_currentSongIndex > 0) {
       _disposeStemPlayers();
       _currentSongIndex--;
-      _pitchOffset = 0;
+      final song = _currentSetlist != null && _currentSongIndex < _currentSetlist!.songs.length
+          ? _currentSetlist!.songs[_currentSongIndex]
+          : null;
+      _pitchOffset = song?.pitchOffsetSemitones ?? 0;
       stop();
+      _applyPitchOffsetToAudio();
+      notifyListeners();
     }
   }
 
@@ -919,6 +946,7 @@ class AudioEngine extends ChangeNotifier {
       final song = _currentSetlist!.songs[index];
       _pitchOffset = song.pitchOffsetSemitones;
       stop();
+      _applyPitchOffsetToAudio();
       notifyListeners();
     }
   }
@@ -975,18 +1003,101 @@ class AudioEngine extends ChangeNotifier {
     try {
       if (!SoLoud.instance.isInitialized) return;
 
+      final song = currentSong;
+      final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
+      final bool isSingleTrack = song == null || !song.isMultiTrack || song.stems.length <= 1;
+
+      // 1. Tom original (0 semitons): desativa filtros para áudio 100% puro e sem overhead de processamento
       if (_pitchOffset == 0) {
-        if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
-          SoLoud.instance.filters.pitchShiftFilter.deactivate();
+        try {
+          if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
+            SoLoud.instance.filters.pitchShiftFilter.deactivate();
+          }
+        } catch (_) {}
+
+        if (song != null) {
+          for (final stem in song.stems) {
+            final source = _stemSources[stem.id];
+            if (source != null) {
+              try {
+                if (!kIsWeb && source.filters.pitchShiftFilter.isActive) {
+                  source.filters.pitchShiftFilter.deactivate();
+                }
+              } catch (_) {}
+            }
+          }
+        }
+        return;
+      }
+
+      // 2. No Web ou Faixa Única (Single Track): usa o filtro no mixer global do SoLoud
+      if (kIsWeb || isSingleTrack) {
+        try {
+          if (!SoLoud.instance.filters.pitchShiftFilter.isActive) {
+            SoLoud.instance.filters.pitchShiftFilter.activate();
+          }
+          SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
+          try {
+            SoLoud.instance.filters.pitchShiftFilter.semitones.value = _pitchOffset.toDouble();
+          } catch (_) {}
+        } catch (e) {
+          debugPrint('Aviso ao aplicar pitchShiftFilter global: $e');
         }
       } else {
-        if (!SoLoud.instance.filters.pitchShiftFilter.isActive) {
-          SoLoud.instance.filters.pitchShiftFilter.activate();
+        // 3. Em plataformas nativas com multitrack:
+        // Aplica individualmente nas faixas da banda (baixo, guitarra, voz, teclado, etc.)
+        // e MANTÉM Click e Guia (CUE) 100% INTACTOS e no tom/tempo original!
+        bool appliedToStems = false;
+        if (song != null) {
+          for (final stem in song.stems) {
+            final source = _stemSources[stem.id];
+            if (source == null) continue;
+            final handle = _stemHandles[stem.id];
+
+            if (stem.isCue) {
+              // Click e Guia NUNCA sofrem pitch shift
+              try {
+                if (source.filters.pitchShiftFilter.isActive) {
+                  source.filters.pitchShiftFilter.deactivate();
+                }
+              } catch (_) {}
+            } else {
+              // Faixas musicais da banda
+              try {
+                if (!source.filters.pitchShiftFilter.isActive) {
+                  source.filters.pitchShiftFilter.activate();
+                }
+                source.filters.pitchShiftFilter.shift(soundHandle: handle).value = factor;
+                try {
+                  source.filters.pitchShiftFilter.semitones(soundHandle: handle).value = _pitchOffset.toDouble();
+                } catch (_) {}
+                appliedToStems = true;
+              } catch (stemErr) {
+                debugPrint('Tentativa de filtro no stem ${stem.name}: $stemErr');
+              }
+            }
+          }
         }
-        final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
-        try {
-          SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
-        } catch (_) {}
+
+        // Se os filtros individuais por faixa funcionaram, desativa o filtro global para não duplicar efeito nem afetar o Click
+        if (appliedToStems) {
+          try {
+            if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
+              SoLoud.instance.filters.pitchShiftFilter.deactivate();
+            }
+          } catch (_) {}
+        } else {
+          // Fallback para filtro global caso filtros individuais não estejam disponíveis
+          try {
+            if (!SoLoud.instance.filters.pitchShiftFilter.isActive) {
+              SoLoud.instance.filters.pitchShiftFilter.activate();
+            }
+            SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
+            try {
+              SoLoud.instance.filters.pitchShiftFilter.semitones.value = _pitchOffset.toDouble();
+            } catch (_) {}
+          } catch (_) {}
+        }
       }
     } catch (e) {
       debugPrint('Aviso ao aplicar pitchShiftFilter no SoLoud: $e');
@@ -1062,6 +1173,7 @@ class AudioEngine extends ChangeNotifier {
       if (existingIndex != -1) {
         _currentSongIndex = existingIndex;
         _pitchOffset = _currentSetlist!.songs[existingIndex].pitchOffsetSemitones;
+        _applyPitchOffsetToAudio();
         notifyListeners();
         return;
       }
@@ -1086,6 +1198,7 @@ class AudioEngine extends ChangeNotifier {
       _currentSetlist!.songs.add(cloned);
       _currentSongIndex = _currentSetlist!.songs.length - 1;
     }
+    _applyPitchOffsetToAudio();
     notifyListeners();
   }
 
