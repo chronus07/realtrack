@@ -22,7 +22,7 @@ class MixerScreen extends StatelessWidget {
     if (song == null) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Mixer de Palco', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          title: const Text('Player', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
         ),
         body: Center(
           child: Padding(
@@ -42,7 +42,7 @@ class MixerScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 const Text(
-                  'Nenhuma música carregada no mixer',
+                  'Nenhuma música carregada no player',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
                   textAlign: TextAlign.center,
                 ),

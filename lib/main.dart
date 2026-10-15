@@ -109,19 +109,26 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
   Widget build(BuildContext context) {
     final screens = [
       SetlistScreen(
-        onOpenMixer: () => _switchTab(2),
-        onNavigateToUpload: () => _switchTab(4),
-      ),
-      LibraryScreen(
-        onOpenMixer: () => _switchTab(2),
-        onNavigateToUpload: () => _switchTab(4),
+        onOpenMixer: () => _switchTab(1),
       ),
       const MixerScreen(),
       ChordsScreen(
-        onOpenMixer: () => _switchTab(2),
+        onOpenMixer: () => _switchTab(1),
       ),
-      UploadScreen(
-        onSongSaved: () => _switchTab(1), // Ao salvar, vai direto para a aba de Acervo
+      LibraryScreen(
+        onOpenMixer: () => _switchTab(1),
+        onNavigateToUpload: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => UploadScreen(
+                onSongSaved: () {
+                  Navigator.of(context).pop();
+                  context.read<AudioEngine>().syncFromCloudSilently();
+                },
+              ),
+            ),
+          );
+        },
       ),
     ];
 
@@ -147,23 +154,19 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
           items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.playlist_play),
-              label: 'Playlists',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.library_music_outlined),
-              label: 'Acervo',
+              label: 'Playlist',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.tune),
-              label: 'Mixer Palco',
+              label: 'Player',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.music_note),
               label: 'Cifras',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.cloud_upload_outlined),
-              label: 'Nova Música',
+              icon: Icon(Icons.library_music_outlined),
+              label: 'Acervo',
             ),
           ],
         ),

@@ -11,12 +11,10 @@ import '../theme/app_theme.dart';
 
 class SetlistScreen extends StatefulWidget {
   final VoidCallback onOpenMixer;
-  final VoidCallback onNavigateToUpload;
 
   const SetlistScreen({
     super.key,
     required this.onOpenMixer,
-    required this.onNavigateToUpload,
   });
 
   @override
@@ -398,9 +396,7 @@ class _SetlistScreenState extends State<SetlistScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _AddSongsBottomSheet(
-        onNavigateToUpload: widget.onNavigateToUpload,
-      ),
+      builder: (ctx) => const _AddSongsBottomSheet(),
     );
   }
 
@@ -1077,14 +1073,10 @@ class _SetlistScreenState extends State<SetlistScreen> {
 }
 
 // ==========================================
-// MODAL BOTTOM SHEET: SELECIONAR DO ACERVO OU SUBIR NOVA
+// MODAL BOTTOM SHEET: SELECIONAR DO ACERVO
 // ==========================================
 class _AddSongsBottomSheet extends StatefulWidget {
-  final VoidCallback onNavigateToUpload;
-
-  const _AddSongsBottomSheet({
-    required this.onNavigateToUpload,
-  });
+  const _AddSongsBottomSheet();
 
   @override
   State<_AddSongsBottomSheet> createState() => _AddSongsBottomSheetState();
@@ -1131,22 +1123,6 @@ class _AddSongsBottomSheetState extends State<_AddSongsBottomSheet> {
                 onPressed: () => Navigator.pop(context),
               ),
             ],
-          ),
-          const SizedBox(height: 12),
-
-          // Botão para Cadastrar Nova Música
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.pop(context);
-              widget.onNavigateToUpload();
-            },
-            icon: const Icon(Icons.cloud_upload_outlined, size: 18, color: AppTheme.primary),
-            label: const Text('+ Enviar Uma Nova Música Agora', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold)),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppTheme.primary),
-              minimumSize: const Size(double.infinity, 44),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
           ),
           const SizedBox(height: 12),
 
