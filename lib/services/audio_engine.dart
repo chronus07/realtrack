@@ -57,8 +57,11 @@ class AudioEngine extends ChangeNotifier {
     try {
       if (!SoLoud.instance.isInitialized) {
         await SoLoud.instance.init();
-        debugPrint('AudioEngine: SoLoud engine inicializado com sucesso.');
       }
+      try {
+        SoLoud.instance.setMaxActiveVoiceCount(128);
+      } catch (_) {}
+      debugPrint('AudioEngine: SoLoud engine inicializado com sucesso (128 vozes ativas).');
     } catch (e) {
       debugPrint('AudioEngine SoLoud init error: $e');
     }
@@ -644,24 +647,34 @@ class AudioEngine extends ChangeNotifier {
           loadTasks.add(() async {
             try {
               AudioSource source;
+              final filePath = stem.filePath!;
+              final ext = filePath.contains('.') ? filePath.split('.').last.toLowerCase() : 'mp3';
+              final uniqueRefName = '${stem.id}.$ext';
+
               if (kIsWeb) {
-                final webBytes = AudioCacheService.getWebBytes(stem.filePath!);
+                final webBytes = AudioCacheService.getWebBytes(filePath);
                 if (webBytes != null) {
                   source = await SoLoud.instance.loadMem(
-                    stem.name,
+                    uniqueRefName,
                     webBytes,
                     mode: LoadMode.memory,
                   );
                 } else {
-                  final url = SupabaseService.getAudioUrl(stem.filePath!);
+                  final url = SupabaseService.getAudioUrl(filePath);
                   source = await SoLoud.instance.loadUrl(url, mode: LoadMode.memory);
                 }
               } else {
-                final localPath = await AudioCacheService.getLocalPathIfExists(stem.filePath!);
-                if (localPath != null) {
+                var localPath = await AudioCacheService.getLocalPathIfExists(filePath);
+                if (localPath == null) {
+                  try {
+                    localPath = await AudioCacheService.getOrDownloadAudio(filePath);
+                  } catch (_) {}
+                }
+
+                if (localPath != null && !localPath.startsWith('http://') && !localPath.startsWith('https://')) {
                   source = await SoLoud.instance.loadFile(localPath, mode: LoadMode.memory);
                 } else {
-                  final url = SupabaseService.getAudioUrl(stem.filePath!);
+                  final url = SupabaseService.getAudioUrl(filePath);
                   source = await SoLoud.instance.loadUrl(url, mode: LoadMode.memory);
                 }
               }
@@ -676,7 +689,7 @@ class AudioEngine extends ChangeNotifier {
                 }
               } catch (_) {}
             } catch (stemErr) {
-              debugPrint('Aviso: Pista ${stem.name} não pôde ser carregada no SoLoud: $stemErr');
+              debugPrint('Aviso: Pista ${stem.name} (${stem.filePath}) não pôde ser carregada no SoLoud: $stemErr');
             }
           }());
         }
@@ -701,6 +714,14 @@ class AudioEngine extends ChangeNotifier {
             pan: stem.pan,
             paused: true,
           );
+
+          try {
+            // PROTEÇÃO CONTRA VOICE STEALING:
+            // Garante que o mixer SoLoud nunca corte ou silencie esta faixa em sessões com muitas vozes
+            SoLoud.instance.setProtectVoice(handle, true);
+            // SINCRONISMO CONTÍNUO: Mantém o ponteiro e clock da faixa avançando mesmo se mutada ou com volume 0
+            SoLoud.instance.setInaudibleBehavior(handle, true, false);
+          } catch (_) {}
 
           if (_currentPositionSeconds > 0.08) {
             SoLoud.instance.seek(

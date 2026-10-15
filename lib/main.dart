@@ -19,7 +19,8 @@ void main() async {
   try {
     if (!SoLoud.instance.isInitialized) {
       await SoLoud.instance.init();
-      debugPrint('SoLoud C++ Audio Engine inicializado com sucesso.');
+      SoLoud.instance.setMaxActiveVoiceCount(128);
+      debugPrint('SoLoud C++ Audio Engine inicializado com sucesso (128 vozes ativas).');
     }
   } catch (e) {
     debugPrint('Aviso ao inicializar SoLoud: $e');
