@@ -18,6 +18,20 @@ class AudioCacheService {
   static bool isWebCached(String storagePath) => _webCache.containsKey(storagePath);
   static Uint8List? getWebBytes(String storagePath) => _webCache[storagePath];
 
+  /// Libera a memória RAM do navegador mantendo apenas a música ativa (evita memory leaks de gigabytes)
+  static void clearWebCacheExcept(Song? activeSong) {
+    if (!kIsWeb) return;
+    if (activeSong == null) {
+      _webCache.clear();
+      return;
+    }
+    final activePaths = activeSong.stems
+        .map((s) => s.filePath)
+        .where((p) => p != null && p.isNotEmpty)
+        .toSet();
+    _webCache.removeWhere((path, _) => !activePaths.contains(path));
+  }
+
   /// Retorna o diretório base de cache de áudio permanente no aparelho
   static Future<Directory> _getCacheDirectory() async {
     final docsDir = await getApplicationDocumentsDirectory();
