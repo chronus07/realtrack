@@ -367,7 +367,6 @@ class AudioEngine extends ChangeNotifier {
     _pitchOffset = found.songs.isNotEmpty ? found.songs[0].pitchOffsetSemitones : 0;
     _isPlaying = false;
     _playbackTicker?.cancel();
-    _driftCheckTimer?.cancel();
     _disposeStemPlayers();
     notifyListeners();
   }
@@ -827,7 +826,7 @@ class AudioEngine extends ChangeNotifier {
         }
         final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
         try {
-          SoLoud.instance.filters.pitchShiftFilter.shift().value = factor;
+          SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
         } catch (_) {}
       }
     } catch (e) {
