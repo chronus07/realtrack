@@ -46,6 +46,7 @@ class Song {
   Song clone({
     String? currentKey,
     int? pitchOffsetSemitones,
+    String? chordsText,
   }) {
     return Song(
       id: id,
@@ -68,7 +69,7 @@ class Song {
         filePath: s.filePath,
       )).toList(),
       sections: List.from(sections),
-      chordsText: chordsText,
+      chordsText: chordsText ?? this.chordsText,
       isDownloaded: isDownloaded,
     );
   }

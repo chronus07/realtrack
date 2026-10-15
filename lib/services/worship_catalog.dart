@@ -181,4 +181,205 @@ class WorshipCatalog {
 
     return null;
   }
+
+  /// Cifras de referência completas integradas para os louvores mais tocados (0 tokens)
+  static String? getBuiltInChords(String rawTitle) {
+    final norm = normalize(rawTitle);
+
+    if (norm.contains('me atraiu')) {
+      return '''[Intro]
+A  D  F#m  E
+A  D  F#m  E
+
+[Verso 1]
+A                       D
+Me atraiu, não deu pra resistir
+                   F#m
+Foi tudo o que eu ouvi
+                E
+Foi tudo o que senti
+A                     D
+Me atraiu, Teu Santo Espírito
+               F#m             E
+Rasgou todo o abismo e me encontrou aqui
+
+[Refrão]
+D               A
+Eu tenho fogo em mim
+                 E
+Que não se apaga mais
+            F#m
+Pois Teu amor me consumiu
+D               A
+Eu tenho fogo em mim
+                 E
+Que queima tudo aqui
+        F#m         D
+E faz nascer adoração
+
+[Ponte]
+D          A
+Santo, Santo
+           E             F#m
+És incomparável em Tua glória
+D          A
+Santo, Santo
+          E
+Para sempre reinas''';
+    }
+
+    if (norm.contains('casa e sua') || norm.contains('a casa e sua')) {
+      return '''[Intro]
+G  C  Em  D
+G  C  Em  D
+
+[Verso]
+G
+Essa casa é Sua casa
+C
+Nós deixamos ela pra Você
+Em
+Essa casa é Sua casa
+D
+Nós deixamos ela pra Você
+G
+Jesus, Jesus
+
+[Refrão]
+G
+Abre a porta e entra
+C
+Nós queremos Tua presença
+Em
+Vem incendiar
+D
+Este lugar
+G
+Abre a porta e entra
+C
+Nós queremos Tua presença
+Em             D
+Vem fazer morada aqui''';
+    }
+
+    if (norm.contains('consagracao') || norm.contains('louvor ao rei')) {
+      return '''[Intro]
+G  C/G  D/F#  Em  C  D  G
+
+[Verso]
+G           D/F#          Em
+Ao Rei dos reis consagro tudo o que sou
+          C          Am          D
+De gratos louvores a Ele a minh'alma transborda
+G          D/F#         Em
+A minha vida eu entrego em Tuas mãos
+         C           D          G
+Meu Salvador, meu Senhor e meu Deus
+
+[Refrão]
+         C           D        G   D/F#  Em
+Pois Teu Reino é de justiça e paz
+      C           D       G
+Tua glória resplandece em mim
+      C           D          G   D/F#  Em
+Teu amor derramado em meu coração
+      C             D          G
+Faz reinar o louvor ao Grande Rei''';
+    }
+
+    if (norm.contains('lindo momento')) {
+      return '''[Intro]
+D  A  Bm  G
+D  A  Bm  G
+
+[Verso 1]
+D                        A
+O Teu amor me encontrou quando eu chorei
+Bm                    G
+A Tua paz me abraçou quando errei
+D                       A
+Toda angústia se foi e agora posso crer
+Bm                    G
+Que Tua graça me basta pra viver
+
+[Refrão]
+D
+Foi um lindo momento
+A
+Quando Você me salvou
+Bm
+Foi um lindo momento
+G
+Quando Teu amor me alcançou
+D              A
+Jesus, Jesus, Te amo
+Bm             G
+Jesus, és tudo pra mim''';
+    }
+
+    if (norm.contains('santo pra sempre')) {
+      return '''[Intro]
+F  Bb  Dm  C
+F  Bb  Dm  C
+
+[Verso 1]
+F
+Mil gerações se prostram em adoração
+Bb
+Ao Deus que era, que é e sempre há de ser
+Dm                          C
+E aos anjos que ao redor do trono estão
+Bb
+Cantando Santo ao Grande Rei
+
+[Refrão]
+Bb            Dm
+A criação proclama
+       C
+És o Senhor
+Bb             Dm
+Tua Igreja canta
+         C
+És o Salvador
+Bb        Dm          C
+Santo, Santo és pra sempre
+F
+Nosso Deus''';
+    }
+
+    if (norm.contains('ousado amor')) {
+      return '''[Intro]
+Gm  F  Eb  Bb
+
+[Verso 1]
+Gm             F               Eb
+Antes de eu falar, Tu cantavas sobre mim
+Gm           F         Eb
+Tu tens sido tão, tão bom pra mim
+Gm             F               Eb
+Antes de eu respirar, sopraste Tua vida em mim
+Gm           F         Eb
+Tu tens sido tão, tão bom pra mim
+
+[Refrão]
+     Gm              F
+Oh, impressionante, infinito
+      Eb           Bb
+E ousado amor de Deus
+     Gm               F
+Oh, que deixa as noventa e nove
+     Eb             Bb
+Só pra me encontrar
+       Gm              F
+Não posso comprá-lo, nem merecê-lo
+    Eb          Bb
+Mesmo assim se entregou
+     Gm              F
+Oh, impressionante, infinito
+      Eb           Bb
+E ousado amor de Deus''';
+    }
+
+    return null;
+  }
 }

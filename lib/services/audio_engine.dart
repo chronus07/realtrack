@@ -11,6 +11,7 @@ import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../models/setlist.dart';
 import 'audio_cache_service.dart';
+import 'chords_ai_service.dart';
 import 'pitch_shifter.dart';
 import 'supabase_service.dart';
 
@@ -429,12 +430,27 @@ class AudioEngine extends ChangeNotifier {
     AudioCacheService.cleanOrphanedCache(_allSetlists, _masterLibrary);
   }
 
+  void _ensureChordsCached(Song song) {
+    if (song.chordsText.trim().isNotEmpty) return;
+    Future.microtask(() async {
+      try {
+        final chords = await ChordsAiService.getOrFetchChords(song);
+        if (chords != null && chords.isNotEmpty) {
+          await updateSongChords(song.id, chords);
+        }
+      } catch (e) {
+        debugPrint('Erro ao obter cifra em background para "${song.title}": $e');
+      }
+    });
+  }
+
   void addSongToSetlist(String setlistId, Song song) {
     final target = _allSetlists.firstWhere((s) => s.id == setlistId, orElse: () => _currentSetlist!);
     if (!target.songs.any((s) => s.id == song.id)) {
       target.songs.add(song.clone());
       notifyListeners();
       SupabaseService.saveSetlistToCloud(target);
+      _ensureChordsCached(song);
     }
   }
 
@@ -444,6 +460,7 @@ class AudioEngine extends ChangeNotifier {
         _currentSetlist!.songs.add(song.clone());
         notifyListeners();
         SupabaseService.saveSetlistToCloud(_currentSetlist!);
+        _ensureChordsCached(song);
       }
     }
   }
@@ -453,6 +470,7 @@ class AudioEngine extends ChangeNotifier {
       for (final song in songs) {
         if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
           _currentSetlist!.songs.add(song.clone());
+          _ensureChordsCached(song);
         }
       }
       notifyListeners();
@@ -919,7 +937,41 @@ class AudioEngine extends ChangeNotifier {
       final song = _currentSetlist!.songs[index];
       _pitchOffset = song.pitchOffsetSemitones;
       stop();
+      notifyListeners();
     }
+  }
+
+  /// Salva e atualiza as Cifras de uma música no Acervo (memória e Supabase)
+  Future<void> updateSongChords(String songId, String newChords) async {
+    // 1. Atualiza no masterLibrary
+    for (int i = 0; i < _masterLibrary.length; i++) {
+      if (_masterLibrary[i].id == songId) {
+        _masterLibrary[i] = _masterLibrary[i].clone(chordsText: newChords);
+      }
+    }
+
+    // 2. Atualiza em todas as playlists em memória
+    for (var setlist in _allSetlists) {
+      for (int i = 0; i < setlist.songs.length; i++) {
+        if (setlist.songs[i].id == songId) {
+          setlist.songs[i] = setlist.songs[i].clone(chordsText: newChords);
+        }
+      }
+    }
+
+    // 3. Atualiza na playlist atual
+    if (_currentSetlist != null) {
+      for (int i = 0; i < _currentSetlist!.songs.length; i++) {
+        if (_currentSetlist!.songs[i].id == songId) {
+          _currentSetlist!.songs[i] = _currentSetlist!.songs[i].clone(chordsText: newChords);
+        }
+      }
+    }
+
+    notifyListeners();
+
+    // 4. Salva no banco de dados na nuvem (Supabase)
+    await SupabaseService.updateSongChords(songId, newChords);
   }
 
   // ==========================================

@@ -432,4 +432,17 @@ class SupabaseService {
       return false;
     }
   }
+
+  /// Salva ou atualiza a Cifra de uma música no Acervo (banco de dados Supabase)
+  static Future<bool> updateSongChords(String songId, String chordsText) async {
+    if (!AppConfig.isConfigured || !isValidUuid(songId)) return false;
+    try {
+      await client.from('songs').update({'chords_text': chordsText}).eq('id', songId);
+      debugPrint('Cifra da música $songId salva com sucesso no Supabase.');
+      return true;
+    } catch (e) {
+      debugPrint('Erro ao salvar cifra no Supabase: $e');
+      return false;
+    }
+  }
 }

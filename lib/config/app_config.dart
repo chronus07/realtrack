@@ -7,6 +7,9 @@ class AppConfig {
   // Nome do bucket onde ficam os arquivos de áudio (.m4a / .mp3)
   static const String audioBucketName = 'audio-tracks';
 
+  // Chave de API opcional do Google Gemini para geração automática de cifras
+  static String geminiApiKey = '';
+
   static bool get isConfigured =>
       supabaseUrl.isNotEmpty &&
       supabaseAnonKey.isNotEmpty &&
