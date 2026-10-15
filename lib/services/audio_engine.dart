@@ -26,6 +26,7 @@ class AudioEngine extends ChangeNotifier {
   // REPRODUÇÃO MULTITRACKS COM SOLOUD (ENGINE C++ SAMPLE-ACCURATE)
   final Map<String, AudioSource> _stemSources = {};
   final Map<String, SoundHandle> _stemHandles = {};
+  final Map<String, String> _stemLoadErrors = {};
   String? _masterStemId;
   bool _isLoadingAudio = false;
   String _loadingStatus = 'Carregando áudio...';
@@ -91,6 +92,10 @@ class AudioEngine extends ChangeNotifier {
   bool get isSyncingCloud => _isSyncingCloud;
   bool get hasActiveSolo => currentSong?.stems.any((s) => s.isSolo) ?? false;
   bool get hasActiveMute => currentSong?.stems.any((s) => s.isMuted) ?? false;
+  int get loadedStemsCount => _stemSources.length;
+  int get totalStemsCount => currentSong?.stems.length ?? 0;
+  bool isStemLoaded(String stemId) => _stemSources.containsKey(stemId);
+  String? getStemError(String stemId) => _stemLoadErrors[stemId];
 
   String get currentKey {
     final song = currentSong;
@@ -559,6 +564,13 @@ class AudioEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> retryFailedStems() async {
+    final song = currentSong;
+    if (song == null) return;
+    _disposeStemPlayers();
+    await _startPlayback();
+  }
+
   Future<void> downloadCurrentSongToDevice({void Function(int done, int total, double pct)? onProgress}) async {
     final song = currentSong;
     if (song == null) return;
@@ -662,98 +674,117 @@ class AudioEngine extends ChangeNotifier {
           );
         }
 
-        // Carrega pistas no SoLoud em lotes controlados de 3 (evita congelar thread ou saturar conexões)
-        for (int i = 0; i < stemsToLoad.length; i += 3) {
-          final batch = stemsToLoad.sublist(i, (i + 3 > stemsToLoad.length) ? stemsToLoad.length : i + 3);
-          await Future.wait(batch.map((stem) async {
-            final filePath = stem.filePath!;
-            final ext = filePath.contains('.') ? filePath.split('.').last.toLowerCase() : 'mp3';
-            final isIsoContainer = ext == 'm4a' || ext == 'mp4' || ext == 'aac';
-            final uniqueRefName = '${stem.id}.$ext';
-            
-            // REGRA FUNDAMENTAL DE CODECS:
-            // Containers ISO (.m4a/.mp4/.aac) e Web NÃO aceitam LoadMode.disk.
-            // Eles exigem LoadMode.memory. Formatos como WAV, MP3 e FLAC em nativo aceitam LoadMode.disk.
-            final loadMode = (kIsWeb || isIsoContainer) ? LoadMode.memory : LoadMode.disk;
+        // Carrega pistas sequencialmente (1 a 1) para evitar picos de memória e I/O
+        _stemLoadErrors.clear();
+        for (int i = 0; i < stemsToLoad.length; i++) {
+          final stem = stemsToLoad[i];
+          final filePath = stem.filePath!;
+          final ext = filePath.contains('.') ? filePath.split('.').last.toLowerCase() : 'mp3';
+          final isIsoContainer = ext == 'm4a' || ext == 'mp4' || ext == 'aac';
+          final uniqueRefName = '${stem.id}.$ext';
 
-            AudioSource? source;
-            int loadAttempts = 0;
+          _loadingStatus = 'Carregando ${i + 1}/${stemsToLoad.length}: ${stem.name}...';
+          _loadingProgress = (i + 1) / stemsToLoad.length;
+          notifyListeners();
 
-            while (source == null && loadAttempts < 2) {
-              loadAttempts++;
-              try {
-                if (kIsWeb) {
-                  var webBytes = AudioCacheService.getWebBytes(filePath);
-                  if (webBytes == null) {
-                    final url = SupabaseService.getAudioUrl(filePath);
-                    final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
-                    if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
-                      webBytes = res.bodyBytes;
-                    }
+          AudioSource? source;
+          String? lastError;
+
+          // REGRA DE ARQUITETURA DE ÁUDIO REALTRACKS:
+          // 1. No Web: usa LoadMode.memory via loadMem.
+          // 2. No Nativo (Android/iOS): se for MP3, WAV, FLAC ou OGG, usa LoadMode.disk (streaming com ring buffer, <1MB RAM por faixa).
+          // Se for M4A ou se LoadMode.disk falhar, faz fallback automático para LoadMode.memory.
+          final preferredMode = (kIsWeb || isIsoContainer) ? LoadMode.memory : LoadMode.disk;
+
+          for (int attempt = 1; attempt <= 2 && source == null; attempt++) {
+            try {
+              if (kIsWeb) {
+                var webBytes = AudioCacheService.getWebBytes(filePath);
+                if (webBytes == null) {
+                  final url = SupabaseService.getAudioUrl(filePath);
+                  final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 35));
+                  if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
+                    webBytes = res.bodyBytes;
                   }
+                }
 
-                  if (webBytes != null) {
-                    source = await SoLoud.instance.loadMem(
-                      uniqueRefName,
-                      webBytes,
-                      mode: LoadMode.memory,
-                    );
-                    // Libera imediatamente a cópia em bytes brutos do heap JS para não duplicar RAM:
-                    AudioCacheService.evictWebBytes(filePath);
+                if (webBytes != null) {
+                  source = await SoLoud.instance.loadMem(
+                    uniqueRefName,
+                    webBytes,
+                    mode: LoadMode.memory,
+                  );
+                  // Desaloca imediatamente a cópia em bytes da memória JS para não inflar heap
+                  AudioCacheService.evictWebBytes(filePath);
+                } else {
+                  lastError = 'Download Web retornou vazio';
+                }
+              } else {
+                // Android / iOS nativo
+                var localPath = await AudioCacheService.getLocalPathIfExists(filePath);
+                if (localPath == null) {
+                  try {
+                    localPath = await AudioCacheService.getOrDownloadAudio(filePath);
+                  } catch (dlErr) {
+                    lastError = 'Download local: $dlErr';
+                  }
+                }
+
+                if (localPath != null && !localPath.startsWith('http://') && !localPath.startsWith('https://')) {
+                  try {
+                    source = await SoLoud.instance.loadFile(localPath, mode: preferredMode);
+                  } catch (loadErr) {
+                    if (preferredMode == LoadMode.disk) {
+                      debugPrint('LoadMode.disk não aceito para ${stem.name}, usando LoadMode.memory: $loadErr');
+                      source = await SoLoud.instance.loadFile(localPath, mode: LoadMode.memory);
+                    } else {
+                      rethrow;
+                    }
                   }
                 } else {
-                  // Android / iOS nativo
-                  var localPath = await AudioCacheService.getLocalPathIfExists(filePath);
-                  if (localPath == null) {
-                    try {
-                      localPath = await AudioCacheService.getOrDownloadAudio(filePath);
-                    } catch (_) {}
-                  }
-
-                  if (localPath != null && !localPath.startsWith('http://') && !localPath.startsWith('https://')) {
-                    source = await SoLoud.instance.loadFile(localPath, mode: loadMode);
+                  // Fallback pela URL
+                  final url = SupabaseService.getAudioUrl(filePath);
+                  if (isIsoContainer) {
+                    final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 35));
+                    if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
+                      source = await SoLoud.instance.loadMem(
+                        uniqueRefName,
+                        res.bodyBytes,
+                        mode: LoadMode.memory,
+                      );
+                    }
                   } else {
-                    // Fallback se download em disco falhou: se for m4a, busca em RAM
-                    if (isIsoContainer) {
-                      final url = SupabaseService.getAudioUrl(filePath);
-                      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
-                      if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
-                        source = await SoLoud.instance.loadMem(
-                          uniqueRefName,
-                          res.bodyBytes,
-                          mode: LoadMode.memory,
-                        );
-                      }
-                    } else {
-                      final url = SupabaseService.getAudioUrl(filePath);
-                      source = await SoLoud.instance.loadUrl(url, mode: loadMode);
-                    }
+                    source = await SoLoud.instance.loadUrl(url, mode: preferredMode);
                   }
-                }
-
-                if (source != null) {
-                  _stemSources[stem.id] = source;
-
-                  try {
-                    final len = SoLoud.instance.getLength(source);
-                    final lenSec = len.inMilliseconds / 1000.0;
-                    if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
-                      _totalDurationSeconds = lenSec;
-                    }
-                  } catch (_) {}
-                }
-              } catch (stemErr) {
-                debugPrint('Aviso tentativa $loadAttempts na pista ${stem.name} ($filePath): $stemErr');
-                if (loadAttempts < 2) {
-                  await Future.delayed(const Duration(milliseconds: 300));
                 }
               }
-            }
 
-            if (source == null) {
-              debugPrint('❌ FALHA DEFINITIVA ao carregar pista no SoLoud: ${stem.name} ($filePath)');
+              if (source != null) {
+                _stemSources[stem.id] = source;
+                try {
+                  final len = SoLoud.instance.getLength(source);
+                  final lenSec = len.inMilliseconds / 1000.0;
+                  if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
+                    _totalDurationSeconds = lenSec;
+                  }
+                } catch (_) {}
+              }
+            } catch (err) {
+              lastError = err.toString();
+              debugPrint('Tentativa $attempt pista ${stem.name} ($filePath) falhou: $err');
+              if (attempt < 2) {
+                await Future.delayed(const Duration(milliseconds: 300));
+              }
             }
-          }));
+          }
+
+          if (source == null) {
+            _stemLoadErrors[stem.id] = lastError ?? 'Erro de decodificação';
+            debugPrint('❌ Falha na pista ${stem.name}: ${_stemLoadErrors[stem.id]}');
+          }
+
+          // Intervalo de 30ms para o Garbage Collector desalocar objetos temporários
+          await Future.delayed(const Duration(milliseconds: 30));
         }
       }
 
@@ -780,6 +811,12 @@ class AudioEngine extends ChangeNotifier {
             paused: true,
           );
 
+          if (handle.isError) {
+            _stemLoadErrors[stem.id] = 'Voz SoLoud esgotada ou inválida';
+            debugPrint('❌ Handle de voz inválido para ${stem.name}');
+            continue;
+          }
+
           try {
             // PROTEÇÃO CONTRA VOICE STEALING:
             // Garante que o mixer SoLoud nunca corte ou silencie esta faixa em sessões com muitas vozes
@@ -789,10 +826,12 @@ class AudioEngine extends ChangeNotifier {
           } catch (_) {}
 
           if (_currentPositionSeconds > 0.08) {
-            SoLoud.instance.seek(
-              handle,
-              Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()),
-            );
+            try {
+              SoLoud.instance.seek(
+                handle,
+                Duration(milliseconds: (_currentPositionSeconds * 1000).toInt()),
+              );
+            } catch (_) {}
           }
 
           _stemHandles[stem.id] = handle;

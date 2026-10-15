@@ -334,6 +334,45 @@ class MixerScreen extends StatelessWidget {
                 ),
               ],
 
+              // Alerta caso alguma pista não tenha carregado no SoLoud
+              if (!engine.isLoadingAudio && engine.isPlaying && engine.loadedStemsCount < song.stems.length) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.roseMute.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppTheme.roseMute.withOpacity(0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded, size: 16, color: AppTheme.roseMute),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${engine.loadedStemsCount}/${song.stems.length} pistas ativas (${song.stems.length - engine.loadedStemsCount} pendentes)',
+                          style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () => engine.retryFailedStems(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTheme.roseMute,
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: const Text(
+                            'Recarregar',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w900, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
               // Marcadores de seção (se existirem)
               if (song.sections.isNotEmpty) ...[
                 const SizedBox(height: 6),

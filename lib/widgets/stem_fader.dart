@@ -161,6 +161,25 @@ class StemFader extends StatelessWidget {
                                   ),
                                 ),
                               ),
+                              if (engine.isPlaying && !engine.isStemLoaded(stem.id)) ...[
+                                const SizedBox(width: 4),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.roseMute.withOpacity(0.25),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'OFFLINE',
+                                    style: TextStyle(
+                                      fontSize: 7,
+                                      fontWeight: FontWeight.w900,
+                                      color: AppTheme.roseMute,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                ),
+                              ],
                               if (isSilencedBySolo) ...[
                                 const SizedBox(width: 4),
                                 const Text(
