@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
+import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/song.dart';
 import '../models/stem_track.dart';
@@ -519,8 +520,8 @@ class AudioEngine extends ChangeNotifier {
     _stemSources.clear();
     _masterStemId = null;
 
-    // Libera a memória RAM do navegador mantendo apenas faixas estritamente necessárias
-    AudioCacheService.clearWebCacheExcept(currentSong);
+    // Libera a memória RAM do navegador de todos os bytes temporários
+    AudioCacheService.clearAllWebBytes();
   }
 
   Future<void> togglePlay() async {
@@ -605,107 +606,166 @@ class AudioEngine extends ChangeNotifier {
       if (!SoLoud.instance.isInitialized) {
         await SoLoud.instance.init();
       }
+      try {
+        SoLoud.instance.setMaxActiveVoiceCount(128);
+      } catch (_) {}
 
-      // GARANTIA TOTAL DE SINCRONISMO:
-      // Garante que 100% das faixas estão em cache permanente no Android/iOS ou em RAM no Web.
-      final isCached = await AudioCacheService.isSongFullyCached(song);
-      if (!isCached) {
-        _loadingStatus = kIsWeb
-            ? 'Pré-carregando faixas em alta fidelidade para sincronismo zero-latência...'
-            : 'Baixando faixas para o aparelho (sincronismo perfeito)...';
-        _loadingProgress = 0.05;
-        notifyListeners();
+      // Limpa fontes que pertencem a músicas antigas para evitar vazamento de memória
+      final validStemIds = song.stems.map((s) => s.id).toSet();
+      _stemSources.removeWhere((id, source) {
+        if (!validStemIds.contains(id)) {
+          try {
+            SoLoud.instance.disposeSource(source);
+          } catch (_) {}
+          return true;
+        }
+        return false;
+      });
 
-        await AudioCacheService.downloadSong(
-          song,
-          onProgress: (done, total, pct) {
-            _loadingStatus = kIsWeb
-                ? 'Carregando faixas na memória: $done/$total (${(pct * 100).toInt()}%)...'
-                : 'Salvando no aparelho: $done/$total (${(pct * 100).toInt()}%)...';
-            _loadingProgress = pct;
-            notifyListeners();
-          },
-        );
-      }
-
-      // 1. Carrega todas as fontes no SoLoud se ainda não carregadas
-      if (_stemSources.isEmpty) {
-        final masterStem = song.stems.firstWhere(
-          (s) => s.name.toUpperCase().contains('CLICK') && (s.filePath?.isNotEmpty ?? false),
+      // Identifica a faixa master (Click ou Guia) para ser a referência de clock
+      final masterStem = song.stems.firstWhere(
+        (s) => s.name.toUpperCase().contains('CLICK') && (s.filePath?.isNotEmpty ?? false),
+        orElse: () => song.stems.firstWhere(
+          (s) => s.name.toUpperCase().contains('GUIA') && (s.filePath?.isNotEmpty ?? false),
           orElse: () => song.stems.firstWhere(
-            (s) => s.name.toUpperCase().contains('GUIA') && (s.filePath?.isNotEmpty ?? false),
-            orElse: () => song.stems.firstWhere(
-              (s) => s.filePath?.isNotEmpty ?? false,
-              orElse: () => song.stems.first,
-            ),
+            (s) => s.filePath?.isNotEmpty ?? false,
+            orElse: () => song.stems.first,
           ),
-        );
-        _masterStemId = masterStem.id;
+        ),
+      );
+      _masterStemId = masterStem.id;
 
-        final List<Future<void>> loadTasks = [];
+      // Pistas que ainda precisam ser carregadas na memória do SoLoud
+      final stemsToLoad = song.stems.where(
+        (s) => (s.filePath != null && s.filePath!.isNotEmpty) && !_stemSources.containsKey(s.id),
+      ).toList();
 
-        for (final stem in song.stems) {
-          if (stem.filePath == null || stem.filePath!.isEmpty) continue;
+      if (stemsToLoad.isNotEmpty) {
+        // Pré-cacheia apenas as faixas pendentes caso necessário
+        final isCached = await AudioCacheService.isSongFullyCached(song);
+        if (!isCached) {
+          _loadingStatus = kIsWeb
+              ? 'Carregando faixas em alta fidelidade...'
+              : 'Garantindo cache local para sincronismo zero-latência...';
+          _loadingProgress = 0.05;
+          notifyListeners();
 
-          loadTasks.add(() async {
-            try {
-              AudioSource source;
-              final filePath = stem.filePath!;
-              final ext = filePath.contains('.') ? filePath.split('.').last.toLowerCase() : 'mp3';
-              final uniqueRefName = '${stem.id}.$ext';
-
-              if (kIsWeb) {
-                final webBytes = AudioCacheService.getWebBytes(filePath);
-                if (webBytes != null) {
-                  source = await SoLoud.instance.loadMem(
-                    uniqueRefName,
-                    webBytes,
-                    mode: LoadMode.disk,
-                  );
-                } else {
-                  final url = SupabaseService.getAudioUrl(filePath);
-                  source = await SoLoud.instance.loadUrl(url, mode: LoadMode.disk);
-                }
-              } else {
-                var localPath = await AudioCacheService.getLocalPathIfExists(filePath);
-                if (localPath == null) {
-                  try {
-                    localPath = await AudioCacheService.getOrDownloadAudio(filePath);
-                  } catch (_) {}
-                }
-
-                if (localPath != null && !localPath.startsWith('http://') && !localPath.startsWith('https://')) {
-                  // STREAMING DIRETO DO DISCO COM RING BUFFER (2 a 5 segundos de janela em RAM):
-                  // Reduz o consumo de RAM de 1.5 GB para menos de 25 MB mantendo precisão de sample
-                  source = await SoLoud.instance.loadFile(localPath, mode: LoadMode.disk);
-                } else {
-                  final url = SupabaseService.getAudioUrl(filePath);
-                  source = await SoLoud.instance.loadUrl(url, mode: LoadMode.disk);
-                }
-              }
-
-              _stemSources[stem.id] = source;
-
-              try {
-                final len = SoLoud.instance.getLength(source);
-                final lenSec = len.inMilliseconds / 1000.0;
-                if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
-                  _totalDurationSeconds = lenSec;
-                }
-              } catch (_) {}
-            } catch (stemErr) {
-              debugPrint('Aviso: Pista ${stem.name} (${stem.filePath}) não pôde ser carregada no SoLoud: $stemErr');
-            }
-          }());
+          await AudioCacheService.downloadSong(
+            song,
+            onProgress: (done, total, pct) {
+              _loadingStatus = kIsWeb
+                  ? 'Carregando na memória: $done/$total (${(pct * 100).toInt()}%)...'
+                  : 'Salvando no aparelho: $done/$total (${(pct * 100).toInt()}%)...';
+              _loadingProgress = pct;
+              notifyListeners();
+            },
+          );
         }
 
-        await Future.wait(loadTasks);
+        // Carrega pistas no SoLoud em lotes controlados de 3 (evita congelar thread ou saturar conexões)
+        for (int i = 0; i < stemsToLoad.length; i += 3) {
+          final batch = stemsToLoad.sublist(i, (i + 3 > stemsToLoad.length) ? stemsToLoad.length : i + 3);
+          await Future.wait(batch.map((stem) async {
+            final filePath = stem.filePath!;
+            final ext = filePath.contains('.') ? filePath.split('.').last.toLowerCase() : 'mp3';
+            final isIsoContainer = ext == 'm4a' || ext == 'mp4' || ext == 'aac';
+            final uniqueRefName = '${stem.id}.$ext';
+            
+            // REGRA FUNDAMENTAL DE CODECS:
+            // Containers ISO (.m4a/.mp4/.aac) e Web NÃO aceitam LoadMode.disk.
+            // Eles exigem LoadMode.memory. Formatos como WAV, MP3 e FLAC em nativo aceitam LoadMode.disk.
+            final loadMode = (kIsWeb || isIsoContainer) ? LoadMode.memory : LoadMode.disk;
+
+            AudioSource? source;
+            int loadAttempts = 0;
+
+            while (source == null && loadAttempts < 2) {
+              loadAttempts++;
+              try {
+                if (kIsWeb) {
+                  var webBytes = AudioCacheService.getWebBytes(filePath);
+                  if (webBytes == null) {
+                    final url = SupabaseService.getAudioUrl(filePath);
+                    final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+                    if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
+                      webBytes = res.bodyBytes;
+                    }
+                  }
+
+                  if (webBytes != null) {
+                    source = await SoLoud.instance.loadMem(
+                      uniqueRefName,
+                      webBytes,
+                      mode: LoadMode.memory,
+                    );
+                    // Libera imediatamente a cópia em bytes brutos do heap JS para não duplicar RAM:
+                    AudioCacheService.evictWebBytes(filePath);
+                  }
+                } else {
+                  // Android / iOS nativo
+                  var localPath = await AudioCacheService.getLocalPathIfExists(filePath);
+                  if (localPath == null) {
+                    try {
+                      localPath = await AudioCacheService.getOrDownloadAudio(filePath);
+                    } catch (_) {}
+                  }
+
+                  if (localPath != null && !localPath.startsWith('http://') && !localPath.startsWith('https://')) {
+                    source = await SoLoud.instance.loadFile(localPath, mode: loadMode);
+                  } else {
+                    // Fallback se download em disco falhou: se for m4a, busca em RAM
+                    if (isIsoContainer) {
+                      final url = SupabaseService.getAudioUrl(filePath);
+                      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+                      if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
+                        source = await SoLoud.instance.loadMem(
+                          uniqueRefName,
+                          res.bodyBytes,
+                          mode: LoadMode.memory,
+                        );
+                      }
+                    } else {
+                      final url = SupabaseService.getAudioUrl(filePath);
+                      source = await SoLoud.instance.loadUrl(url, mode: loadMode);
+                    }
+                  }
+                }
+
+                if (source != null) {
+                  _stemSources[stem.id] = source;
+
+                  try {
+                    final len = SoLoud.instance.getLength(source);
+                    final lenSec = len.inMilliseconds / 1000.0;
+                    if (lenSec > _totalDurationSeconds || _totalDurationSeconds == 240.0) {
+                      _totalDurationSeconds = lenSec;
+                    }
+                  } catch (_) {}
+                }
+              } catch (stemErr) {
+                debugPrint('Aviso tentativa $loadAttempts na pista ${stem.name} ($filePath): $stemErr');
+                if (loadAttempts < 2) {
+                  await Future.delayed(const Duration(milliseconds: 300));
+                }
+              }
+            }
+
+            if (source == null) {
+              debugPrint('❌ FALHA DEFINITIVA ao carregar pista no SoLoud: ${stem.name} ($filePath)');
+            }
+          }));
+        }
       }
 
       if (_stemSources.isEmpty) {
         _startPlaybackClock();
       } else {
-        // DISPARO SIMULTÂNEO NA ENGINE C++ (SAMPLE-ACCURATE):
+        // Interrompe e limpa quaisquer handles anteriores antes de novo disparo
+        for (final oldHandle in _stemHandles.values) {
+          try {
+            SoLoud.instance.stop(oldHandle);
+          } catch (_) {}
+        }
         _stemHandles.clear();
 
         for (final stem in song.stems) {

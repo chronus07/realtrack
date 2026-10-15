@@ -18,6 +18,16 @@ class AudioCacheService {
   static bool isWebCached(String storagePath) => _webCache.containsKey(storagePath);
   static Uint8List? getWebBytes(String storagePath) => _webCache[storagePath];
 
+  /// Remove os bytes brutos de uma faixa da RAM Web imediatamente após decodificação no SoLoud
+  static void evictWebBytes(String storagePath) {
+    _webCache.remove(storagePath);
+  }
+
+  /// Limpa todos os bytes brutos da memória Web
+  static void clearAllWebBytes() {
+    _webCache.clear();
+  }
+
   /// Libera a memória RAM do navegador mantendo apenas a música ativa (evita memory leaks de gigabytes)
   static void clearWebCacheExcept(Song? activeSong) {
     if (!kIsWeb) return;
@@ -132,72 +142,82 @@ class AudioCacheService {
     _downloadProgress[storagePath] = 0.01;
 
     final url = SupabaseService.getAudioUrl(storagePath);
-    http.Client? client;
 
-    try {
-      final file = await _getLocalFile(storagePath);
-      final tempFile = File('${file.path}.tmp');
+    int attempts = 0;
+    while (attempts < 2) {
+      attempts++;
+      http.Client? client;
+      try {
+        final file = await _getLocalFile(storagePath);
+        final tempFile = File('${file.path}.tmp');
 
-      if (await tempFile.exists()) {
-        try {
-          await tempFile.delete();
-        } catch (_) {}
-      }
-
-      client = http.Client();
-      final request = http.Request('GET', Uri.parse(url));
-      final response = await client.send(request);
-
-      if (response.statusCode == 200) {
-        final totalBytes = response.contentLength ?? 0;
-        int receivedBytes = 0;
-
-        final sink = tempFile.openWrite();
-        await response.stream.forEach((chunk) {
-          sink.add(chunk);
-          receivedBytes += chunk.length;
-          if (totalBytes > 0) {
-            final prog = (receivedBytes / totalBytes).clamp(0.0, 1.0);
-            _downloadProgress[storagePath] = prog;
-            onProgress?.call(prog);
-          }
-        });
-
-        await sink.flush();
-        await sink.close();
-
-        if (await tempFile.exists() && await tempFile.length() > 512) {
-          if (await file.exists()) {
-            try {
-              await file.delete();
-            } catch (_) {}
-          }
+        if (await tempFile.exists()) {
           try {
-            await tempFile.rename(file.path);
-          } catch (_) {
-            // Em alguns dispositivos Android, rename entre volumes falha; usa copy + delete
-            await tempFile.copy(file.path);
-            try {
-              await tempFile.delete();
-            } catch (_) {}
-          }
-
-          if (await file.exists() && await file.length() > 512) {
-            _cachedPaths[storagePath] = file.path;
-            _downloadProgress[storagePath] = 1.0;
-            debugPrint('✅ Faixa salva no cache permanentemente: ${file.path}');
-            return file.path;
-          }
+            await tempFile.delete();
+          } catch (_) {}
         }
+
+        client = http.Client();
+        final request = http.Request('GET', Uri.parse(url));
+        final response = await client.send(request).timeout(const Duration(seconds: 40));
+
+        if (response.statusCode == 200) {
+          final totalBytes = response.contentLength ?? 0;
+          int receivedBytes = 0;
+
+          final sink = tempFile.openWrite();
+          await response.stream.forEach((chunk) {
+            sink.add(chunk);
+            receivedBytes += chunk.length;
+            if (totalBytes > 0) {
+              final prog = (receivedBytes / totalBytes).clamp(0.0, 1.0);
+              _downloadProgress[storagePath] = prog;
+              onProgress?.call(prog);
+            }
+          });
+
+          await sink.flush();
+          await sink.close();
+
+          if (await tempFile.exists() && await tempFile.length() > 512) {
+            if (await file.exists()) {
+              try {
+                await file.delete();
+              } catch (_) {}
+            }
+            try {
+              await tempFile.rename(file.path);
+            } catch (_) {
+              // Em alguns dispositivos Android, rename entre volumes falha; usa copy + delete
+              await tempFile.copy(file.path);
+              try {
+                await tempFile.delete();
+              } catch (_) {}
+            }
+
+            if (await file.exists() && await file.length() > 512) {
+              _cachedPaths[storagePath] = file.path;
+              _downloadProgress[storagePath] = 1.0;
+              debugPrint('✅ Faixa salva no cache permanentemente: ${file.path}');
+              return file.path;
+            }
+          }
+        } else {
+          debugPrint('Aviso HTTP ${response.statusCode} ao baixar $storagePath (tentativa $attempts)');
+        }
+      } catch (e) {
+        debugPrint('Erro tentativa $attempts ao baixar áudio $storagePath: $e');
+        if (attempts < 2) {
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      } finally {
+        client?.close();
       }
-    } catch (e) {
-      debugPrint('Erro ao baixar áudio $storagePath: $e');
-    } finally {
-      client?.close();
-      _activeDownloads.remove(storagePath);
     }
 
-    // Fallback: URL direta de streaming caso a rede caia durante o download
+    _activeDownloads.remove(storagePath);
+
+    // Fallback: URL direta caso falhe gravação local
     return SupabaseService.getAudioUrl(storagePath);
   }
 
@@ -222,15 +242,27 @@ class AudioCacheService {
           onProgress?.call(completed, total, completed / total);
           continue;
         }
-        try {
-          final url = SupabaseService.getAudioUrl(stem.filePath!);
-          final res = await http.get(Uri.parse(url));
-          if (res.statusCode == 200) {
-            _webCache[stem.filePath!] = res.bodyBytes;
+
+        int attempts = 0;
+        bool success = false;
+        while (!success && attempts < 3) {
+          attempts++;
+          try {
+            final url = SupabaseService.getAudioUrl(stem.filePath!);
+            final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+            if (res.statusCode == 200 && res.bodyBytes.lengthInBytes > 1024) {
+              _webCache[stem.filePath!] = res.bodyBytes;
+              success = true;
+            } else {
+              debugPrint('Aviso: HTTP ${res.statusCode} na pista Web ${stem.name} (tentativa $attempts)');
+              await Future.delayed(const Duration(milliseconds: 300));
+            }
+          } catch (e) {
+            debugPrint('Erro tentativa $attempts ao baixar stem ${stem.name} na Web: $e');
+            await Future.delayed(const Duration(milliseconds: 400));
           }
-        } catch (e) {
-          debugPrint('Erro ao carregar stem na Web RAM: $e');
         }
+
         completed++;
         onProgress?.call(completed, total, completed / total);
       }
