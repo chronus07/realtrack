@@ -8,9 +8,7 @@ import 'theme/app_theme.dart';
 import 'screens/setlist_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/mixer_screen.dart';
-import 'screens/chords_screen.dart';
 import 'screens/upload_screen.dart';
-import 'services/update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,15 +62,12 @@ class MainNavigationShell extends StatefulWidget {
 }
 
 class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsBindingObserver {
-  int _currentIndex = 0; // Inicia na tela de Playlists
+  int _currentIndex = 0; // Inicia na tela de Playlist
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAppUpdates();
-    });
   }
 
   @override
@@ -89,16 +84,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
     }
   }
 
-  Future<void> _checkAppUpdates() async {
-    // Na Web, o usuário simplesmente recarrega com F5. O aviso de download de APK só é exibido no app Android instalado.
-    if (kIsWeb) return;
-
-    final updateInfo = await UpdateService.checkForUpdate();
-    if (updateInfo != null && updateInfo.hasUpdate && mounted) {
-      UpdateService.showUpdateDialog(context, updateInfo);
-    }
-  }
-
   void _switchTab(int index) {
     setState(() {
       _currentIndex = index;
@@ -112,9 +97,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
         onOpenMixer: () => _switchTab(1),
       ),
       const MixerScreen(),
-      ChordsScreen(
-        onOpenMixer: () => _switchTab(1),
-      ),
       LibraryScreen(
         onOpenMixer: () => _switchTab(1),
         onNavigateToUpload: () {
@@ -159,10 +141,6 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
             BottomNavigationBarItem(
               icon: Icon(Icons.tune),
               label: 'Player',
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.music_note),
-              label: 'Cifras',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.library_music_outlined),

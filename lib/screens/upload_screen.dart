@@ -682,27 +682,6 @@ class _UploadScreenState extends State<UploadScreen> {
               ],
               const SizedBox(height: 16),
 
-              // Cifra & Letra (Opcional)
-              Theme(
-                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                child: ExpansionTile(
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('Cifra e Letra da Música (Opcional)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Cole os acordes para acompanhar sincronizado no palco', style: TextStyle(fontSize: 10, color: Colors.white54)),
-                  children: [
-                    TextField(
-                      controller: _chordsController,
-                      maxLines: 6,
-                      decoration: InputDecoration(
-                        hintText: 'Cole a cifra aqui...\nExemplo:\nG   D   Em7   C9\nOh, impressionante amor...',
-                        filled: true,
-                        fillColor: AppTheme.card,
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
 
               const SizedBox(height: 20),
 

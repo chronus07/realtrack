@@ -26,64 +26,9 @@ class UpdateService {
   static const String defaultDownloadUrl =
       'https://github.com/chronus07/realtrack/releases/download/latest/app-release.apk';
 
-  /// Verifica se há uma versão mais recente
+  /// Verificação de atualização desativada a pedido do usuário
   static Future<AppUpdateInfo?> checkForUpdate() async {
-    // Na Web, o usuário atualiza a página simplesmente dando F5. Desabilita verificação e download de APK.
-    if (kIsWeb) return null;
-
-    try {
-      // 1. Tenta buscar da tabela app_config no Supabase
-      if (AppConfig.isConfigured) {
-        try {
-          final client = SupabaseService.client;
-          final res = await client.from('app_config').select('*');
-          if (res.isNotEmpty) {
-            String latestVersion = currentVersion;
-            String downloadUrl = defaultDownloadUrl;
-            String changelog = 'Melhorias de sincronização do acervo e novidades no app.';
-
-            for (var row in res) {
-              if (row['key'] == 'latest_version') latestVersion = row['value'];
-              if (row['key'] == 'apk_download_url') downloadUrl = row['value'];
-              if (row['key'] == 'release_notes') changelog = row['value'];
-            }
-
-            final bool hasUpdate = _isVersionNewer(latestVersion, currentVersion);
-            return AppUpdateInfo(
-              latestVersion: latestVersion,
-              downloadUrl: downloadUrl,
-              changelog: changelog,
-              hasUpdate: hasUpdate,
-            );
-          }
-        } catch (_) {
-          // Continua para o fallback do GitHub Releases
-        }
-      }
-
-      // 2. Fallback: Checa a API de Releases do GitHub
-      final ghRes = await http.get(
-        Uri.parse('https://api.github.com/repos/chronus07/realtrack/releases/latest'),
-        headers: {'Accept': 'application/vnd.github.v3+json'},
-      );
-
-      if (ghRes.statusCode == 200) {
-        final data = jsonDecode(ghRes.body);
-        final tagName = data['tag_name'] ?? '1.0.1';
-        final cleanTag = tagName.replaceAll(RegExp(r'[^0-9.]'), '');
-        final body = data['body'] ?? 'Novas melhorias e correções.';
-        final hasUpdate = _isVersionNewer(cleanTag, currentVersion);
-
-        return AppUpdateInfo(
-          latestVersion: cleanTag,
-          downloadUrl: defaultDownloadUrl,
-          changelog: body,
-          hasUpdate: hasUpdate,
-        );
-      }
-    } catch (e) {
-      debugPrint('Erro ao verificar atualizações: $e');
-    }
+    // Verificação de atualização desativada a pedido do usuário
     return null;
   }
 

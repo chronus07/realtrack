@@ -11,7 +11,6 @@ import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../models/setlist.dart';
 import 'audio_cache_service.dart';
-import 'chords_ai_service.dart';
 import 'pitch_shifter.dart';
 import 'supabase_service.dart';
 
@@ -430,27 +429,12 @@ class AudioEngine extends ChangeNotifier {
     AudioCacheService.cleanOrphanedCache(_allSetlists, _masterLibrary);
   }
 
-  void _ensureChordsCached(Song song) {
-    if (song.chordsText.trim().isNotEmpty) return;
-    Future.microtask(() async {
-      try {
-        final chords = await ChordsAiService.getOrFetchChords(song);
-        if (chords != null && chords.isNotEmpty) {
-          await updateSongChords(song.id, chords);
-        }
-      } catch (e) {
-        debugPrint('Erro ao obter cifra em background para "${song.title}": $e');
-      }
-    });
-  }
-
   void addSongToSetlist(String setlistId, Song song) {
     final target = _allSetlists.firstWhere((s) => s.id == setlistId, orElse: () => _currentSetlist!);
     if (!target.songs.any((s) => s.id == song.id)) {
       target.songs.add(song.clone());
       notifyListeners();
       SupabaseService.saveSetlistToCloud(target);
-      _ensureChordsCached(song);
     }
   }
 
@@ -460,7 +444,6 @@ class AudioEngine extends ChangeNotifier {
         _currentSetlist!.songs.add(song.clone());
         notifyListeners();
         SupabaseService.saveSetlistToCloud(_currentSetlist!);
-        _ensureChordsCached(song);
       }
     }
   }
@@ -470,7 +453,6 @@ class AudioEngine extends ChangeNotifier {
       for (final song in songs) {
         if (!_currentSetlist!.songs.any((s) => s.id == song.id)) {
           _currentSetlist!.songs.add(song.clone());
-          _ensureChordsCached(song);
         }
       }
       notifyListeners();
