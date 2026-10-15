@@ -149,7 +149,7 @@ jobs:
 
       - name: Build Flutter Web (Always fresh on F5, no caching)
         run: |
-          flutter build web --release --base-href /realtrack/
+          flutter build web --release --base-href /realtrack/ --no-tree-shake-icons
           rm -f build/web/flutter_service_worker.js || true
 
       - name: Copy Extra Web Files

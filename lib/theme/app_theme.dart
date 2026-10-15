@@ -7,6 +7,7 @@ class AppTheme {
   static const Color primary = Color(0xFF38BDF8);    // Sky 400 (Destaque)
   static const Color amberCue = Color(0xFFFBBF24);   // Âmbar para Click / Guia
   static const Color emeraldSafe = Color(0xFF34D399);// Verde para Split Ativo / Offline
+  static const Color emeraldPlay = Color(0xFF10B981);// Verde para Play / Cifras salvas
   static const Color roseMute = Color(0xFFF43F5E);   // Vermelho para Mute
 
   static ThemeData darkTheme = ThemeData(
