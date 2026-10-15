@@ -691,19 +691,16 @@ class AudioEngine extends ChangeNotifier {
         // DISPARO SIMULTÂNEO NA ENGINE C++ (SAMPLE-ACCURATE):
         _stemHandles.clear();
 
-        // Agenda todas as vozes para iniciarem no mesmo instante de relógio da engine
-        final atTime = SoLoud.instance.getEngineTime() + const Duration(milliseconds: 30);
-
         for (final stem in song.stems) {
           final source = _stemSources[stem.id];
           if (source == null) continue;
 
           final effVol = stem.getEffectiveVolume(hasActiveSolo);
-          final handle = SoLoud.instance.playScheduled(
+          final handle = SoLoud.instance.play(
             source,
-            atTime,
             volume: effVol,
             pan: stem.pan,
+            paused: true,
           );
 
           if (_currentPositionSeconds > 0.08) {
@@ -714,6 +711,13 @@ class AudioEngine extends ChangeNotifier {
           }
 
           _stemHandles[stem.id] = handle;
+        }
+
+        // Dispara todas as faixas simultaneamente no motor de áudio C++
+        for (final handle in _stemHandles.values) {
+          try {
+            SoLoud.instance.setPause(handle, false);
+          } catch (_) {}
         }
 
         _startPlaybackClock();
@@ -823,7 +827,7 @@ class AudioEngine extends ChangeNotifier {
         }
         final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
         try {
-          SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
+          SoLoud.instance.filters.pitchShiftFilter.shift().value = factor;
         } catch (_) {}
       }
     } catch (e) {
