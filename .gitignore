@@ -10,6 +10,12 @@
 .svn/
 migrate_working_dir/
 
+# Cloud importer
+cloud_importer/node_modules/
+cloud_importer/bin/
+cloud_importer/temp/
+cloud_importer/.env
+
 # IntelliJ related
 *.iml
 *.ipr

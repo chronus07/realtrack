@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: realtracks-importer
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true

@@ -10,6 +10,10 @@ class AppConfig {
   // Chave de API opcional do Google Gemini para geração automática de cifras
   static String geminiApiKey = '';
 
+  // URL do serviço na nuvem RealTracks Cloud Importer (YouTube / Spotify)
+  // Pode ser o localhost durante testes locais ou a URL do Render/Railway em produção
+  static String cloudImporterUrl = 'http://localhost:3000';
+
   static bool get isConfigured =>
       supabaseUrl.isNotEmpty &&
       supabaseAnonKey.isNotEmpty &&

@@ -1,0 +1,21 @@
+{
+  "name": "realtracks-cloud-importer",
+  "version": "1.0.0",
+  "description": "Microserviço em nuvem para extração de áudios do YouTube e Spotify e upload direto no Supabase RealTracks",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.4",
+    "axios": "^1.7.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "yt-dlp-wrap": "^2.3.12"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

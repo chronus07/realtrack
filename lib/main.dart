@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'services/audio_engine.dart';
+import 'services/metronome_service.dart';
 import 'services/supabase_service.dart';
 import 'theme/app_theme.dart';
 import 'screens/setlist_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/mixer_screen.dart';
+import 'screens/metronome_screen.dart';
 import 'screens/upload_screen.dart';
 
 void main() async {
@@ -34,6 +36,7 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AudioEngine()),
+        ChangeNotifierProvider(create: (_) => MetronomeService()),
       ],
       child: const RealTracksApp(),
     ),
@@ -97,6 +100,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
         onOpenMixer: () => _switchTab(1),
       ),
       const MixerScreen(),
+      const MetronomeScreen(),
       LibraryScreen(
         onOpenMixer: () => _switchTab(1),
         onNavigateToUpload: () {
@@ -141,6 +145,10 @@ class _MainNavigationShellState extends State<MainNavigationShell> with WidgetsB
             BottomNavigationBarItem(
               icon: Icon(Icons.tune),
               label: 'Player',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.speed),
+              label: 'Metrônomo',
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.library_music_outlined),
