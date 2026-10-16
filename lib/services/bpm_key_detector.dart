@@ -29,6 +29,14 @@ class AudioDetectionResult {
   bool get hasKey => key != null && key!.isNotEmpty;
   bool get hasAny => hasBpm || hasKey;
 
+  String get summary {
+    final parts = <String>[];
+    if (hasKey) parts.add('Tom: $key');
+    if (hasBpm) parts.add('$bpm BPM');
+    if (timeSignature != null && timeSignature!.isNotEmpty) parts.add(timeSignature!);
+    return parts.isEmpty ? 'Nenhum padrão identificado' : parts.join(' • ');
+  }
+
   @override
   String toString() => 'AudioDetectionResult(bpm: $bpm, key: $key, timeSignature: $timeSignature, source: $source, confidence: ${(confidence * 100).toInt()}%)';
 }
