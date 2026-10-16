@@ -287,7 +287,7 @@ class _UploadScreenState extends State<UploadScreen> {
       }
 
       if (createdSong != null) {
-        context.read<AudioEngine>().addLocalSongToLibrary(createdSong);
+        context.read<AudioEngine>().addSongToLibrary(createdSong);
       } else {
         final mockStems = _selectedStems.map((s) {
           return StemTrack(
@@ -313,7 +313,7 @@ class _UploadScreenState extends State<UploadScreen> {
           stems: mockStems,
         );
 
-        context.read<AudioEngine>().addLocalSongToLibrary(localOnlySong);
+        context.read<AudioEngine>().addSongToLibrary(localOnlySong);
       }
 
       setState(() {

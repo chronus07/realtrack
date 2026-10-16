@@ -525,13 +525,12 @@ class MetronomeService extends ChangeNotifier {
   @override
   void dispose() {
     _timer?.cancel();
-    _hiSource?.let((s) => SoLoud.instance.disposeSource(s));
-    _loSource?.let((s) => SoLoud.instance.disposeSource(s));
-    _subSource?.let((s) => SoLoud.instance.disposeSource(s));
+    final hi = _hiSource;
+    if (hi != null) SoLoud.instance.disposeSource(hi);
+    final lo = _loSource;
+    if (lo != null) SoLoud.instance.disposeSource(lo);
+    final sub = _subSource;
+    if (sub != null) SoLoud.instance.disposeSource(sub);
     super.dispose();
   }
-}
-
-extension<T> on T {
-  void let(void Function(T) op) => op(this);
 }

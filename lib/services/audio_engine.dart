@@ -291,6 +291,8 @@ class AudioEngine extends ChangeNotifier {
     }
   }
 
+  void addLocalSongToLibrary(Song song) => addSongToLibrary(song);
+
   Future<void> updateLibrarySongKeyAndBpm(String songId, {String? key, int? bpm}) async {
     final idx = _masterLibrary.indexWhere((s) => s.id == songId);
     if (idx != -1) {
