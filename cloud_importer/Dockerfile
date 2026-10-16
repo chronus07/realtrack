@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 
 # Instala ffmpeg, python3, curl e certificados no Debian 12 Bookworm (versão estável oficial)
 RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \

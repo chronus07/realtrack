@@ -3,6 +3,10 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const WebSocket = require('ws');
+if (!global.WebSocket) {
+  global.WebSocket = WebSocket;
+}
 const { createClient } = require('@supabase/supabase-js');
 const YtDlpWrap = require('yt-dlp-wrap').default || require('yt-dlp-wrap');
 require('dotenv').config();
@@ -267,7 +271,12 @@ app.post('/api/import', async (req, res) => {
       return res.status(400).json({ error: 'Credenciais do Supabase não informadas.' });
     }
 
-    const supabase = createClient(targetSbUrl, targetSbKey);
+    const supabase = createClient(targetSbUrl, targetSbKey, {
+      auth: { persistSession: false },
+      realtime: {
+        transport: WebSocket,
+      },
+    });
     const fileId = `yt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const outputPattern = path.join(TEMP_DIR, `${fileId}.%(ext)s`);
 
