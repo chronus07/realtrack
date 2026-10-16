@@ -1,12 +1,16 @@
-FROM node:20-bullseye-slim
+FROM node:20-bookworm-slim
 
-# Instala ffmpeg e python3 (necessários para o yt-dlp converter áudio em MP3)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Instala ffmpeg, python3, curl e certificados no Debian 12 Bookworm (versão estável oficial)
+RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     ffmpeg \
     python3 \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Instala o binário mais recente do yt-dlp diretamente no sistema
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp
 
 WORKDIR /app
 

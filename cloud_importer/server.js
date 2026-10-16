@@ -25,6 +25,11 @@ let ytDlp = null;
 
 // Garante que o executável yt-dlp esteja disponível (baixa automaticamente se necessário)
 async function ensureYtDlp() {
+  if (fs.existsSync('/usr/local/bin/yt-dlp')) {
+    console.log('[yt-dlp] Usando binário do sistema: /usr/local/bin/yt-dlp');
+    ytDlp = new YtDlpWrap('/usr/local/bin/yt-dlp');
+    return;
+  }
   if (fs.existsSync(ytDlpPath)) {
     console.log(`[yt-dlp] Binário encontrado em: ${ytDlpPath}`);
     ytDlp = new YtDlpWrap(ytDlpPath);
