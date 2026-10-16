@@ -81,7 +81,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.0',
+    version: '1.0.1',
     ytdlpReady: !!ytDlp,
   });
 });
@@ -109,7 +109,7 @@ app.post('/api/resolve', async (req, res) => {
         let artist = '';
         const thumbnail = spotifyData.thumbnail_url || '';
 
-        // Tenta buscar metadados mais detalhados na página aberta
+        // Tenta buscar o artista na descrição oficial da página
         try {
           const pageRes = await axios.get(trimmedUrl, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
@@ -117,7 +117,6 @@ app.post('/api/resolve', async (req, res) => {
           const matchDesc = pageRes.data.match(/<meta property="og:description" content="([^"]+)"/i);
           if (matchDesc) {
             const desc = matchDesc[1];
-            // Ex: "Julliany Souza · Song · 2022" ou "Ouça Lindo Momento no Spotify. Gabriela Rocha · Música · 2023."
             const parts = desc.split('·');
             if (parts.length > 0) {
               artist = parts[0].replace(/Ouça [^.]+ no Spotify\./i, '').trim();
@@ -125,22 +124,35 @@ app.post('/api/resolve', async (req, res) => {
           }
         } catch (_) {}
 
-        // Busca o vídeo correspondente no YouTube
-        const searchQuery = `ytsearch1:${artist ? `${artist} - ` : ''}${title} audio`;
-        console.log(`[Resolve] Buscando correspondência no YouTube: "${searchQuery}"`);
-
-        const ytJson = await ytDlp.execPromise([searchQuery, '--dump-json', '--no-warnings']);
-        const ytInfo = JSON.parse(ytJson);
+        // Busca o vídeo correspondente no YouTube usando o cliente móvel android para contornar verificações de datacenter
+        let resolvedYtUrl = '';
+        try {
+          const searchQuery = `ytsearch1:${artist ? `${artist} - ` : ''}${title} audio`;
+          console.log(`[Resolve] Buscando correspondência no YouTube: "${searchQuery}"`);
+          const ytJson = await ytDlp.execPromise([
+            searchQuery,
+            '--dump-json',
+            '--no-warnings',
+            '--extractor-args',
+            'youtube:player_client=android,ios,web'
+          ]);
+          const ytInfo = JSON.parse(ytJson);
+          resolvedYtUrl = ytInfo.webpage_url;
+        } catch (ytErr) {
+          console.warn('[Resolve] Busca yt-dlp falhou, usando query direta:', ytErr.message);
+          // Fallback de busca no YouTube
+          resolvedYtUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(`${artist} ${title}`)}`;
+        }
 
         const detected = detectKeyAndBpm(title, artist);
 
         return res.json({
           source: 'spotify',
           title: title,
-          artist: artist || ytInfo.uploader || 'Artista Desconhecido',
-          thumbnail: thumbnail || ytInfo.thumbnail,
-          durationSeconds: ytInfo.duration || 240,
-          youtubeUrl: ytInfo.webpage_url,
+          artist: artist || 'Artista Desconhecido',
+          thumbnail: thumbnail,
+          durationSeconds: 240,
+          youtubeUrl: resolvedYtUrl,
           detectedKey: detected.key,
           detectedBpm: detected.bpm,
           detectedTimeSignature: detected.timeSignature,
@@ -153,11 +165,41 @@ app.post('/api/resolve', async (req, res) => {
     // 2. CASO SEJA LINK DO YOUTUBE
     if (trimmedUrl.includes('youtube.com') || trimmedUrl.includes('youtu.be')) {
       console.log(`[Resolve] Analisando link YouTube: ${trimmedUrl}`);
-      const ytJson = await ytDlp.execPromise([trimmedUrl, '--dump-json', '--no-warnings']);
-      const ytInfo = JSON.parse(ytJson);
 
-      let cleanTitle = ytInfo.title || '';
-      let artist = ytInfo.uploader || '';
+      let cleanTitle = '';
+      let artist = '';
+      let thumbnail = '';
+      let durationSeconds = 240;
+
+      // 2.1 Usa o YouTube oEmbed oficial (instantâneo, sem rate-limit e sem CAPTCHA de datacenter)
+      try {
+        const oembedRes = await axios.get(`https://www.youtube.com/oembed?url=${encodeURIComponent(trimmedUrl)}&format=json`);
+        cleanTitle = oembedRes.data.title || '';
+        artist = oembedRes.data.author_name || '';
+        thumbnail = oembedRes.data.thumbnail_url || '';
+      } catch (oembedErr) {
+        console.warn('[Resolve] oEmbed YouTube falhou:', oembedErr.message);
+      }
+
+      // 2.2 Se oEmbed não preencheu, tenta yt-dlp com cliente Android
+      if (!cleanTitle) {
+        try {
+          const ytJson = await ytDlp.execPromise([
+            trimmedUrl,
+            '--dump-json',
+            '--no-warnings',
+            '--extractor-args',
+            'youtube:player_client=android,ios,web'
+          ]);
+          const ytInfo = JSON.parse(ytJson);
+          cleanTitle = ytInfo.title || '';
+          artist = ytInfo.uploader || artist;
+          thumbnail = ytInfo.thumbnail || thumbnail;
+          durationSeconds = ytInfo.duration || durationSeconds;
+        } catch (dumpErr) {
+          console.warn('[Resolve] yt-dlp dump falhou:', dumpErr.message);
+        }
+      }
 
       // Tenta separar "Artista - Título" se estiver no formato comum
       if (cleanTitle.includes(' - ')) {
@@ -166,18 +208,18 @@ app.post('/api/resolve', async (req, res) => {
         cleanTitle = split.slice(1).join(' - ').trim();
       }
 
-      // Remove termos redundantes como (Official Video), [Audio Oficial], etc.
+      // Limpa termos como (Official Video), [Audio Oficial], etc.
       cleanTitle = cleanTitle.replace(/\((oficial|official|video|áudio|audio|clipe|lyric)\)/gi, '').trim();
 
       const detected = detectKeyAndBpm(cleanTitle, artist);
 
       return res.json({
         source: 'youtube',
-        title: cleanTitle,
-        artist: artist,
-        thumbnail: ytInfo.thumbnail,
-        durationSeconds: ytInfo.duration || 240,
-        youtubeUrl: ytInfo.webpage_url || trimmedUrl,
+        title: cleanTitle || 'Música do YouTube',
+        artist: artist || 'Artista',
+        thumbnail: thumbnail,
+        durationSeconds: durationSeconds,
+        youtubeUrl: trimmedUrl,
         detectedKey: detected.key,
         detectedBpm: detected.bpm,
         detectedTimeSignature: detected.timeSignature,
@@ -231,7 +273,7 @@ app.post('/api/import', async (req, res) => {
 
     console.log(`[Import] Baixando áudio de "${youtubeUrl}" para converter em MP3...`);
 
-    // Baixa o áudio na melhor qualidade e converte para MP3 192k
+    // Baixa o áudio na melhor qualidade e converte para MP3 192k usando emulação de cliente móvel android/ios
     await ytDlp.execPromise([
       youtubeUrl,
       '-x',
@@ -240,6 +282,8 @@ app.post('/api/import', async (req, res) => {
       '--audio-quality',
       '192K',
       '--no-playlist',
+      '--extractor-args',
+      'youtube:player_client=android,ios,web',
       '-o',
       outputPattern,
     ]);
@@ -286,7 +330,6 @@ app.post('/api/import', async (req, res) => {
       });
 
     if (uploadErr) {
-      // Se falhar o upload, remove a música criada para manter consistência
       await supabase.from('songs').delete().eq('id', songId);
       throw uploadErr;
     }
@@ -323,7 +366,6 @@ app.post('/api/import', async (req, res) => {
     console.error('[Import Error]:', err);
     res.status(500).json({ error: err.message || 'Falha ao importar e salvar no Supabase.' });
   } finally {
-    // Remove o arquivo temporário do servidor
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
         fs.unlinkSync(tempFilePath);
