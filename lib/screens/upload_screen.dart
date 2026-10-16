@@ -364,16 +364,36 @@ class _UploadScreenState extends State<UploadScreen> {
   // MODO 2: IMPORTAR POR LINK (YOUTUBE / SPOTIFY)
   // ==========================================
 
+  String _sanitizeUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.contains('youtube.com') || trimmed.contains('youtu.be')) {
+      try {
+        final uri = Uri.parse(trimmed);
+        if (uri.host.contains('youtu.be')) {
+          final id = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '';
+          if (id.isNotEmpty) return 'https://www.youtube.com/watch?v=$id';
+        }
+        final v = uri.queryParameters['v'];
+        if (v != null && v.isNotEmpty) {
+          return 'https://www.youtube.com/watch?v=$v';
+        }
+      } catch (_) {}
+      return trimmed.split('&').first;
+    }
+    return trimmed;
+  }
+
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data?.text != null && data!.text!.trim().isNotEmpty) {
-      _linkController.text = data.text!.trim();
+      _linkController.text = _sanitizeUrl(data.text!.trim());
       _resolveLink();
     }
   }
 
   Future<void> _resolveLink() async {
-    final rawUrl = _linkController.text.trim();
+    final rawUrl = _sanitizeUrl(_linkController.text.trim());
+    _linkController.text = rawUrl;
     if (rawUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -526,7 +546,7 @@ class _UploadScreenState extends State<UploadScreen> {
     final title = _titleController.text.trim();
     final artist = _artistController.text.trim();
     final bpm = int.tryParse(_bpmController.text.trim()) ?? 120;
-    final ytUrl = _resolvedYoutubeUrl ?? _linkController.text.trim();
+    final ytUrl = _sanitizeUrl(_resolvedYoutubeUrl ?? _linkController.text.trim());
 
     if (title.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(

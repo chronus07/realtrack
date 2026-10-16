@@ -78,6 +78,24 @@ function detectKeyAndBpm(title, artist = '') {
   };
 }
 
+// Remove parâmetros de playlist, mix ou rádio do link do YouTube para evitar bloqueio anti-bot
+function cleanYoutubeUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  const trimmed = rawUrl.trim();
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname.includes('youtu.be')) {
+      const id = parsed.pathname.replace(/^\/+/, '').split('/')[0].split('?')[0];
+      if (id) return `https://www.youtube.com/watch?v=${id}`;
+    }
+    const id = parsed.searchParams.get('v');
+    if (id) {
+      return `https://www.youtube.com/watch?v=${id}`;
+    }
+  } catch (_) {}
+  return trimmed.split('&')[0];
+}
+
 // ==========================================
 // ENDPOINT: HEALTH CHECK
 // ==========================================
@@ -85,7 +103,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.2',
+    version: '1.0.3',
     ytdlpReady: !!ytDlp,
   });
 });
@@ -223,7 +241,7 @@ app.post('/api/resolve', async (req, res) => {
         artist: artist || 'Artista',
         thumbnail: thumbnail,
         durationSeconds: durationSeconds,
-        youtubeUrl: trimmedUrl,
+        youtubeUrl: cleanYoutubeUrl(trimmedUrl),
         detectedKey: detected.key,
         detectedBpm: detected.bpm,
         detectedTimeSignature: detected.timeSignature,
@@ -242,6 +260,7 @@ app.post('/api/resolve', async (req, res) => {
 // ==========================================
 app.post('/api/import', async (req, res) => {
   let tempFilePath = null;
+  let cookieFilePath = null;
   try {
     const {
       youtubeUrl,
@@ -277,29 +296,75 @@ app.post('/api/import', async (req, res) => {
         transport: WebSocket,
       },
     });
+    const cleanUrl = cleanYoutubeUrl(youtubeUrl);
     const fileId = `yt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const outputPattern = path.join(TEMP_DIR, `${fileId}.%(ext)s`);
 
-    console.log(`[Import] Baixando áudio de "${youtubeUrl}" para converter em MP3...`);
+    console.log(`[Import] Baixando áudio de "${cleanUrl}" (original: "${youtubeUrl}")...`);
 
-    // Baixa o áudio na melhor qualidade e converte para MP3 192k usando emulação de cliente móvel android/ios
-    await ytDlp.execPromise([
-      youtubeUrl,
-      '-x',
-      '--audio-format',
-      'mp3',
-      '--audio-quality',
-      '192K',
-      '--no-playlist',
-      '--extractor-args',
-      'youtube:player_client=android,ios,web',
-      '-o',
-      outputPattern,
-    ]);
+    // Carrega cookies do YouTube se fornecidos no payload ou configurados no ambiente do Render
+    const cookiesContent = (req.body.cookies || process.env.YOUTUBE_COOKIES || '').trim();
+    if (cookiesContent) {
+      cookieFilePath = path.join(TEMP_DIR, `cookies_${fileId}.txt`);
+      const isBase64 = !cookiesContent.includes('\n') && cookiesContent.length > 50 && /^[A-Za-z0-9+/=]+$/.test(cookiesContent);
+      const fileData = isBase64 ? Buffer.from(cookiesContent, 'base64').toString('utf-8') : cookiesContent;
+      fs.writeFileSync(cookieFilePath, fileData, 'utf-8');
+      console.log(`[Import] Arquivo de cookies do YouTube configurado temporariamente.`);
+    }
 
-    tempFilePath = path.join(TEMP_DIR, `${fileId}.mp3`);
-    if (!fs.existsSync(tempFilePath)) {
-      throw new Error('O arquivo MP3 resultante não foi encontrado após o download.');
+    // Estratégias de player_client para contornar restrições de IP de datacenter
+    const strategies = [
+      // 1. Cliente TV + Web Safari (altamente tolerante em servidores na nuvem)
+      ['--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
+      // 2. Cliente Android puro
+      ['--extractor-args', 'youtube:player_client=android'],
+      // 3. Cliente iOS
+      ['--extractor-args', 'youtube:player_client=ios'],
+      // 4. Fallback misto
+      ['--extractor-args', 'youtube:player_client=mweb,android,ios,web'],
+    ];
+
+    let downloaded = false;
+    let lastError = null;
+
+    for (const strat of strategies) {
+      const args = [
+        cleanUrl,
+        '-x',
+        '--audio-format', 'mp3',
+        '--audio-quality', '192K',
+        '--no-playlist',
+        '--no-warnings',
+        ...strat,
+      ];
+      if (cookieFilePath) {
+        args.push('--cookies', cookieFilePath);
+      }
+      args.push('-o', outputPattern);
+
+      try {
+        console.log(`[Import] Tentando download com estratégia: ${strat[1]}`);
+        await ytDlp.execPromise(args);
+        tempFilePath = path.join(TEMP_DIR, `${fileId}.mp3`);
+        if (fs.existsSync(tempFilePath)) {
+          downloaded = true;
+          console.log(`[Import] Download concluído com sucesso via estratégia: ${strat[1]}`);
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+        console.warn(`[Import] Falha na estratégia ${strat[1]}:`, err.message);
+      }
+    }
+
+    if (!downloaded || !fs.existsSync(tempFilePath)) {
+      if (lastError && lastError.message && lastError.message.includes('Sign in to confirm')) {
+        throw new Error(
+          'O YouTube ativou a proteção anti-bot para este IP. ' +
+          'Dica: Adicione a variável YOUTUBE_COOKIES no painel do Render com seus cookies do YouTube (cookies.txt).'
+        );
+      }
+      throw lastError || new Error('O arquivo MP3 resultante não foi encontrado após o download.');
     }
 
     const fileStats = fs.statSync(tempFilePath);
@@ -378,6 +443,11 @@ app.post('/api/import', async (req, res) => {
     if (tempFilePath && fs.existsSync(tempFilePath)) {
       try {
         fs.unlinkSync(tempFilePath);
+      } catch (_) {}
+    }
+    if (cookieFilePath && fs.existsSync(cookieFilePath)) {
+      try {
+        fs.unlinkSync(cookieFilePath);
       } catch (_) {}
     }
   }
