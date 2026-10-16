@@ -85,7 +85,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.1',
+    version: '1.0.2',
     ytdlpReady: !!ytDlp,
   });
 });
