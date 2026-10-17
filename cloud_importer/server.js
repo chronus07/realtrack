@@ -100,11 +100,14 @@ function cleanYoutubeUrl(rawUrl) {
 // ENDPOINT: HEALTH CHECK
 // ==========================================
 app.get('/health', (req, res) => {
+  const envCookies = (process.env.YOUTUBE_COOKIES || '').trim();
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.5',
+    version: '1.0.6',
     ytdlpReady: !!ytDlp,
+    hasCookiesConfigured: envCookies.length > 0,
+    cookiesLength: envCookies.length,
   });
 });
 
@@ -303,13 +306,16 @@ app.post('/api/import', async (req, res) => {
     console.log(`[Import] Baixando áudio de "${cleanUrl}" (original: "${youtubeUrl}")...`);
 
     // Carrega cookies do YouTube se fornecidos no payload ou configurados no ambiente do Render
-    const cookiesContent = (req.body.cookies || process.env.YOUTUBE_COOKIES || '').trim();
-    if (cookiesContent) {
+    const rawCookies = (req.body.cookies || process.env.YOUTUBE_COOKIES || '').trim();
+    if (rawCookies) {
       cookieFilePath = path.join(TEMP_DIR, `cookies_${fileId}.txt`);
-      const isBase64 = !cookiesContent.includes('\n') && cookiesContent.length > 50 && /^[A-Za-z0-9+/=]+$/.test(cookiesContent);
-      const fileData = isBase64 ? Buffer.from(cookiesContent, 'base64').toString('utf-8') : cookiesContent;
+      const isBase64 = !rawCookies.includes('\n') && rawCookies.length > 50 && /^[A-Za-z0-9+/=]+$/.test(rawCookies);
+      let fileData = isBase64 ? Buffer.from(rawCookies, 'base64').toString('utf-8') : rawCookies;
+      if (fileData.includes('\\n') && !fileData.includes('\n')) {
+        fileData = fileData.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+      }
       fs.writeFileSync(cookieFilePath, fileData, 'utf-8');
-      console.log(`[Import] Arquivo de cookies do YouTube configurado temporariamente.`);
+      console.log(`[Import] Arquivo de cookies do YouTube configurado (${fileData.length} bytes, ${fileData.split('\n').length} linhas).`);
     }
 
     // Estratégias de formato e cliente para garantir que o áudio seja extraído com ou sem cookies
