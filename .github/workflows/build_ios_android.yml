@@ -1,4 +1,4 @@
-name: Build RealTracks (Android, iOS & Web PWA)
+name: Build RealTracks (Android, Windows, iOS & Web PWA)
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # ==========================================
-  # JOB 1: BUILD DO ANDROID (.apk) & GITHUB RELEASE
+  # JOB 1: BUILD DO ANDROID (.apk)
   # ==========================================
   build-android:
     name: Build Android APK
@@ -51,28 +51,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RealTracks-Android-APK
-          path: build/app/outputs/flutter-apk/*.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      - name: Publish Direct APK to GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main'
-        with:
-          tag_name: latest
-          name: "RealTracks - Versão Mais Recente"
-          body: "Atualização automática com instalador direto (.apk) para a banda."
-          draft: false
-          prerelease: false
-          files: build/app/outputs/flutter-apk/app-release.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   # ==========================================
-  # JOB 2: BUILD DO IOS (macOS Runner)
+  # JOB 2: BUILD DO WINDOWS (.exe & INSTALADOR)
   # ==========================================
-  build-ios:
-    name: Build iOS (sem precisar de Mac local)
-    runs-on: macos-latest
+  build-windows:
+    name: Build Windows Desktop & Installer
+    runs-on: windows-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -83,39 +70,53 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Generate iOS Native Platform
-        run: flutter create --offline . --project-name realtracks --org com.realtracks.app --platforms=ios || flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
+      - name: Enable Windows Desktop & Generate Runner
+        run: |
+          flutter config --enable-windows-desktop
+          flutter create --project-name realtracks --org com.realtracks.app --platforms=windows .
 
       - name: Install Dependencies
         run: flutter pub get
 
-      - name: Code Diagnostics
-        run: flutter analyze || true
+      - name: Build Windows Desktop App
+        run: flutter build windows --release --no-tree-shake-icons
 
-      - name: Build iOS App
+      - name: Create Portable ZIP
+        shell: pwsh
         run: |
-          flutter build ios --release --no-codesign || {
-            echo "Aviso: Build iOS completo com avisos de assinatura (Development Team). Prosseguindo..."
-            exit 0
+          Compress-Archive -Path "build\windows\x64\runner\Release\*" -DestinationPath "RealTracks-Windows-Portable.zip" -Force
+
+      - name: Setup Inno Setup Compiler
+        shell: pwsh
+        run: |
+          if (!(Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y
           }
 
-      - name: Compress iOS App Bundle
+      - name: Compile Windows Installer (.exe)
+        shell: pwsh
         run: |
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            cd build/ios/iphoneos
-            mkdir -p Payload
-            cp -r Runner.app Payload/
-            zip -r RealTracks-iOS.ipa Payload
-          else
-            echo "Runner.app não assinado, pulando empacotamento IPA."
-          fi
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows_installer.iss
 
-      - name: Upload iOS Payload
+      - name: Verify Installer Exists
+        shell: pwsh
+        run: |
+          if (Test-Path "RealTracks-Windows-Installer.exe") {
+            Write-Host "RealTracks-Windows-Installer.exe criado com sucesso!"
+            Get-Item "RealTracks-Windows-Installer.exe" | Format-List Name, Length
+          } else {
+            Write-Error "Arquivo RealTracks-Windows-Installer.exe não foi encontrado!"
+            exit 1
+          }
+
+      - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: RealTracks-iOS-Build
-          path: build/ios/iphoneos/RealTracks-iOS.ipa
-          if-no-files-found: warn
+          name: RealTracks-Windows-Builds
+          path: |
+            RealTracks-Windows-Installer.exe
+            RealTracks-Windows-Portable.zip
+          if-no-files-found: error
 
   # ==========================================
   # JOB 3: BUILD WEB PWA (GITHUB PAGES)
@@ -147,7 +148,7 @@ jobs:
       - name: Code Diagnostics
         run: flutter analyze || true
 
-      - name: Build Flutter Web (Always fresh on F5, no caching)
+      - name: Build Flutter Web (Fresh cache busting)
         run: |
           flutter build web --release --base-href /realtrack/ --no-tree-shake-icons
           rm -f build/web/flutter_service_worker.js || true
@@ -160,3 +161,111 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
+
+  # ==========================================
+  # JOB 4: BUILD DO IOS (OPCIONAL)
+  # ==========================================
+  build-ios:
+    name: Build iOS (sem precisar de Mac local)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Generate iOS Native Platform
+        run: flutter create --offline . --project-name realtracks --org com.realtracks.app --platforms=ios || flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Code Diagnostics
+        run: flutter analyze || true
+
+      - name: Build iOS App
+        run: |
+          flutter build ios --release --no-codesign || {
+            echo "Aviso: Build iOS completo com avisos de assinatura. Prosseguindo..."
+            exit 0
+          }
+
+      - name: Compress iOS App Bundle
+        run: |
+          if [ -d "build/ios/iphoneos/Runner.app" ]; then
+            cd build/ios/iphoneos
+            mkdir -p Payload
+            cp -r Runner.app Payload/
+            zip -r RealTracks-iOS.ipa Payload
+          else
+            echo "Runner.app não assinado, pulando empacotamento IPA."
+          fi
+
+      - name: Upload iOS Payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealTracks-iOS-Build
+          path: build/ios/iphoneos/RealTracks-iOS.ipa
+          if-no-files-found: warn
+
+  # ==========================================
+  # JOB 5: GITHUB RELEASE UNIFICADO
+  # ==========================================
+  publish-release:
+    name: Publish Direct Installers to GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-android, build-windows]
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Create Release Directory
+        run: mkdir -p release-files
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: RealTracks-Windows-Builds
+          path: release-files
+        continue-on-error: true
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: RealTracks-Android-APK
+          path: release-files
+        continue-on-error: true
+
+      - name: List Release Files
+        run: ls -la release-files/
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "RealTracks - Versão Mais Recente (Instaladores Windows & Android)"
+          body: |
+            ## 🎵 RealTracks - Aplicativo Oficial para a Banda
+
+            Baixe o instalador direto para o seu dispositivo:
+
+            ### 🪟 Windows Desktop (Computador / Notebook da Igreja):
+            * **[RealTracks-Windows-Installer.exe](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Installer.exe)** *(Instalador oficial: cria atalho na Área de Trabalho e no Menu Iniciar)*
+            * **[RealTracks-Windows-Portable.zip](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Portable.zip)** *(Versão portátil: extraia em qualquer pasta ou pendrive e abra o `realtracks.exe`)*
+
+            ### 📱 Android (Celular / Tablet):
+            * **[app-release.apk](https://github.com/chronus07/realtrack/releases/download/latest/app-release.apk)** *(Instalador APK direto)*
+
+            ### 🌐 Versão Web:
+            * Acesse pelo navegador: **https://chronus07.github.io/realtrack/**
+          draft: false
+          prerelease: false
+          files: release-files/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
