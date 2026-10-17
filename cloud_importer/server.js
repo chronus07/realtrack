@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.3',
+    version: '1.0.4',
     ytdlpReady: !!ytDlp,
   });
 });
@@ -312,17 +312,22 @@ app.post('/api/import', async (req, res) => {
       console.log(`[Import] Arquivo de cookies do YouTube configurado temporariamente.`);
     }
 
-    // Estratégias de player_client para contornar restrições de IP de datacenter
-    const strategies = [
-      // 1. Cliente TV + Web Safari (altamente tolerante em servidores na nuvem)
-      ['--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
-      // 2. Cliente Android puro
-      ['--extractor-args', 'youtube:player_client=android'],
-      // 3. Cliente iOS
-      ['--extractor-args', 'youtube:player_client=ios'],
-      // 4. Fallback misto
-      ['--extractor-args', 'youtube:player_client=mweb,android,ios,web'],
-    ];
+    // Estratégias de formato e cliente para garantir que o áudio seja extraído com ou sem cookies
+    const strategies = cookieFilePath
+      ? [
+          // Com cookies válidos: extrator web padrão com seleção explícita de melhor áudio
+          ['-f', 'ba/b'],
+          ['-f', 'bestaudio'],
+          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=android'],
+          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=mweb,android,web'],
+        ]
+      : [
+          // Sem cookies: tenta clientes alternativos que não bloqueiam por bot
+          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
+          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=android'],
+          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=mweb,android,web'],
+          ['-f', 'ba/b'],
+        ];
 
     let downloaded = false;
     let lastError = null;
@@ -330,12 +335,12 @@ app.post('/api/import', async (req, res) => {
     for (const strat of strategies) {
       const args = [
         cleanUrl,
+        ...strat,
         '-x',
         '--audio-format', 'mp3',
         '--audio-quality', '192K',
         '--no-playlist',
         '--no-warnings',
-        ...strat,
       ];
       if (cookieFilePath) {
         args.push('--cookies', cookieFilePath);
@@ -343,17 +348,17 @@ app.post('/api/import', async (req, res) => {
       args.push('-o', outputPattern);
 
       try {
-        console.log(`[Import] Tentando download com estratégia: ${strat[1]}`);
+        console.log(`[Import] Tentando download com argumentos: ${strat.join(' ')}`);
         await ytDlp.execPromise(args);
         tempFilePath = path.join(TEMP_DIR, `${fileId}.mp3`);
         if (fs.existsSync(tempFilePath)) {
           downloaded = true;
-          console.log(`[Import] Download concluído com sucesso via estratégia: ${strat[1]}`);
+          console.log(`[Import] Download concluído com sucesso via: ${strat.join(' ')}`);
           break;
         }
       } catch (err) {
         lastError = err;
-        console.warn(`[Import] Falha na estratégia ${strat[1]}:`, err.message);
+        console.warn(`[Import] Falha na tentativa (${strat.join(' ')}):`, err.message);
       }
     }
 
