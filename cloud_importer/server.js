@@ -15,6 +15,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 app.use(express.json());
 
 // Diretório de binários e temporários
@@ -104,7 +114,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.6',
+    version: '1.0.7',
     ytdlpReady: !!ytDlp,
     hasCookiesConfigured: envCookies.length > 0,
     cookiesLength: envCookies.length,
@@ -318,23 +328,24 @@ app.post('/api/import', async (req, res) => {
       console.log(`[Import] Arquivo de cookies do YouTube configurado (${fileData.length} bytes, ${fileData.split('\n').length} linhas).`);
     }
 
-    // Estratégias de formato e cliente para garantir que o áudio seja extraído com ou sem cookies
-    const strategies = cookieFilePath
-      ? [
-          // Com cookies válidos: extrator web padrão do yt-dlp (o -x escolhe automaticamente a melhor faixa de áudio)
-          [],
-          ['-f', 'ba/b'],
-          ['-f', 'bestaudio/best'],
-          ['--extractor-args', 'youtube:player_client=android'],
-          ['--extractor-args', 'youtube:player_client=mweb,android,web'],
-        ]
-      : [
-          // Sem cookies: tenta clientes alternativos que não bloqueiam por bot
-          ['--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
-          ['--extractor-args', 'youtube:player_client=android'],
-          ['--extractor-args', 'youtube:player_client=mweb,android,web'],
-          [],
-        ];
+    // Estratégias de formato e cliente:
+    // NOTA: APIs móveis do YouTube (android, ios) bloqueiam se receberem cookies web desktop.
+    // Portanto, clientes móveis devem ser executados prioritariamente SEM cookies!
+    const strategies = [];
+
+    // Se temos cookies configurados, testamos clientes web com cookies primeiro:
+    if (cookieFilePath) {
+      strategies.push({ args: [], useCookies: true });
+      strategies.push({ args: ['-f', 'ba/b'], useCookies: true });
+      strategies.push({ args: ['-f', 'bestaudio/best'], useCookies: true });
+    }
+
+    // Clientes mobile nativos SEM cookies (bypassam proteções de datacenter e não exigem PO tokens)
+    strategies.push({ args: ['--extractor-args', 'youtube:player_client=android'], useCookies: false });
+    strategies.push({ args: ['--extractor-args', 'youtube:player_client=ios'], useCookies: false });
+    strategies.push({ args: ['--extractor-args', 'youtube:player_client=mweb'], useCookies: false });
+    strategies.push({ args: ['--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'], useCookies: false });
+    strategies.push({ args: [], useCookies: false });
 
     let downloaded = false;
     let lastError = null;
@@ -343,30 +354,30 @@ app.post('/api/import', async (req, res) => {
       const args = [
         cleanUrl,
         '--js-runtimes', 'deno,node',
-        ...strat,
+        ...strat.args,
         '-x',
         '--audio-format', 'mp3',
         '--audio-quality', '192K',
         '--no-playlist',
         '--no-warnings',
       ];
-      if (cookieFilePath) {
+      if (strat.useCookies && cookieFilePath) {
         args.push('--cookies', cookieFilePath);
       }
       args.push('-o', outputPattern);
 
       try {
-        console.log(`[Import] Tentando download com argumentos: ${strat.join(' ')}`);
+        console.log(`[Import] Tentando download com argumentos: ${strat.args.join(' ')} (cookies: ${strat.useCookies && !!cookieFilePath})`);
         await ytDlp.execPromise(args);
         tempFilePath = path.join(TEMP_DIR, `${fileId}.mp3`);
         if (fs.existsSync(tempFilePath)) {
           downloaded = true;
-          console.log(`[Import] Download concluído com sucesso via: ${strat.join(' ')}`);
+          console.log(`[Import] Download concluído com sucesso via: ${strat.args.join(' ')}`);
           break;
         }
       } catch (err) {
         lastError = err;
-        console.warn(`[Import] Falha na tentativa (${strat.join(' ')}):`, err.message);
+        console.warn(`[Import] Falha na tentativa (${strat.args.join(' ')}):`, err.message);
       }
     }
 
@@ -374,7 +385,7 @@ app.post('/api/import', async (req, res) => {
       if (lastError && lastError.message && lastError.message.includes('Sign in to confirm')) {
         throw new Error(
           'O YouTube ativou a proteção anti-bot para este IP. ' +
-          'Dica: Adicione a variável YOUTUBE_COOKIES no painel do Render com seus cookies do YouTube (cookies.txt).'
+          'Dica: Inicie o microserviço localmente com "iniciar_importer_local.bat" e aponte para http://localhost:3000 ou renove seus cookies.'
         );
       }
       throw lastError || new Error('O arquivo MP3 resultante não foi encontrado após o download.');
@@ -421,16 +432,15 @@ app.post('/api/import', async (req, res) => {
       throw uploadErr;
     }
 
-    // 3. Criar a pista única (single track) na tabela `stems`
+    // 3. Criar a pista única (single track) na tabela `song_stems`
     const { data: stemData, error: stemErr } = await supabase
-      .from('stems')
+      .from('song_stems')
       .insert({
         song_id: songId,
         name: finalTitle.toUpperCase(),
-        file_path: storagePath,
-        volume: 0.85,
-        pan: 0.0, // Centralizado no C (Centro)
         is_cue: false,
+        storage_path: storagePath,
+        file_size_bytes: fileStats.size,
       })
       .select()
       .single();
