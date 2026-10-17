@@ -81,6 +81,20 @@ jobs:
       - name: Build Windows Desktop App
         run: flutter build windows --release --no-tree-shake-icons
 
+      - name: Bundle Visual C++ Runtime & Dependencies
+        shell: pwsh
+        run: |
+          # 1. Copia as DLLs do Visual C++ CRT da instalação do Visual Studio para o Release
+          $vcDirs = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending
+          if ($vcDirs) {
+            $latestVc = $vcDirs[0].FullName
+            Write-Host "Copiando DLLs do runtime de: $latestVc"
+            Copy-Item "$latestVc\x64\Microsoft.VC143.CRT\*.dll" "build\windows\x64\runner\Release\" -Force -ErrorAction SilentlyContinue
+          }
+          # 2. Baixa o instalador oficial do Visual C++ Redistributable para o Inno Setup executar durante a instalação
+          Invoke-WebRequest "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile "vc_redist.x64.exe"
+          Write-Host "vc_redist.x64.exe baixado com sucesso."
+
       - name: Create Portable ZIP
         shell: pwsh
         run: |
