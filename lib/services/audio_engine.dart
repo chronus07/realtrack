@@ -653,7 +653,10 @@ class AudioEngine extends ChangeNotifier {
         SoLoud.instance.setMaxActiveVoiceCount(128);
       } catch (_) {}
 
-      // Limpa fontes que pertencem a músicas antigas para evitar vazamento de memória
+      // Limpa fontes e memória web que pertencem a músicas antigas para evitar vazamento de memória
+      if (kIsWeb) {
+        AudioCacheService.clearWebCacheExcept(song);
+      }
       final validStemIds = song.stems.map((s) => s.id).toSet();
       _stemSources.removeWhere((id, source) {
         if (!validStemIds.contains(id)) {
@@ -754,12 +757,15 @@ class AudioEngine extends ChangeNotifier {
                 }
 
                 if (webBytes != null) {
-                  source = await SoLoud.instance.loadMem(
-                    uniqueRefName,
-                    webBytes,
-                    mode: LoadMode.memory,
-                  );
-                  AudioCacheService.evictWebBytes(filePath);
+                  try {
+                    source = await SoLoud.instance.loadMem(
+                      uniqueRefName,
+                      webBytes,
+                      mode: LoadMode.memory,
+                    );
+                  } finally {
+                    AudioCacheService.evictWebBytes(filePath);
+                  }
                 } else {
                   lastError = 'Download Web retornou vazio';
                 }
