@@ -103,7 +103,7 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'online',
     service: 'realtracks-cloud-importer',
-    version: '1.0.4',
+    version: '1.0.5',
     ytdlpReady: !!ytDlp,
   });
 });
@@ -315,18 +315,19 @@ app.post('/api/import', async (req, res) => {
     // Estratégias de formato e cliente para garantir que o áudio seja extraído com ou sem cookies
     const strategies = cookieFilePath
       ? [
-          // Com cookies válidos: extrator web padrão com seleção explícita de melhor áudio
+          // Com cookies válidos: extrator web padrão do yt-dlp (o -x escolhe automaticamente a melhor faixa de áudio)
+          [],
           ['-f', 'ba/b'],
-          ['-f', 'bestaudio'],
-          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=android'],
-          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=mweb,android,web'],
+          ['-f', 'bestaudio/best'],
+          ['--extractor-args', 'youtube:player_client=android'],
+          ['--extractor-args', 'youtube:player_client=mweb,android,web'],
         ]
       : [
           // Sem cookies: tenta clientes alternativos que não bloqueiam por bot
-          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
-          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=android'],
-          ['-f', 'ba/b', '--extractor-args', 'youtube:player_client=mweb,android,web'],
-          ['-f', 'ba/b'],
+          ['--extractor-args', 'youtube:player_client=tv,web_safari;player_skip=webpage'],
+          ['--extractor-args', 'youtube:player_client=android'],
+          ['--extractor-args', 'youtube:player_client=mweb,android,web'],
+          [],
         ];
 
     let downloaded = false;
@@ -335,6 +336,7 @@ app.post('/api/import', async (req, res) => {
     for (const strat of strategies) {
       const args = [
         cleanUrl,
+        '--js-runtimes', 'deno,node',
         ...strat,
         '-x',
         '--audio-format', 'mp3',
