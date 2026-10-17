@@ -7,7 +7,6 @@ import '../models/song.dart';
 import '../models/stem_track.dart';
 import '../services/audio_engine.dart';
 import '../services/bpm_key_detector.dart';
-import '../services/cloud_importer_service.dart';
 import '../services/supabase_service.dart';
 import '../services/worship_catalog.dart';
 import '../theme/app_theme.dart';
@@ -22,20 +21,11 @@ class UploadScreen extends StatefulWidget {
 }
 
 class _UploadScreenState extends State<UploadScreen> {
-  // Modo de Upload: 0 = Arquivo Local, 1 = Link YouTube / Spotify
-  int _uploadMode = 0;
-
   // Controladores do formulário
   final _titleController = TextEditingController();
   final _artistController = TextEditingController();
   final _bpmController = TextEditingController(text: '72');
   final _chordsController = TextEditingController();
-
-  // Controladores do modo Link
-  final _linkController = TextEditingController();
-  bool _isResolvingLink = false;
-  Map<String, dynamic>? _resolvedLinkData;
-  String? _resolvedYoutubeUrl;
 
   String _selectedKey = 'G';
   String _selectedTimeSignature = '4/4';
@@ -58,7 +48,6 @@ class _UploadScreenState extends State<UploadScreen> {
     _artistController.dispose();
     _bpmController.dispose();
     _chordsController.dispose();
-    _linkController.dispose();
     super.dispose();
   }
 
@@ -361,276 +350,6 @@ class _UploadScreenState extends State<UploadScreen> {
   }
 
   // ==========================================
-  // MODO 2: IMPORTAR POR LINK (YOUTUBE / SPOTIFY)
-  // ==========================================
-
-  String _sanitizeUrl(String url) {
-    final trimmed = url.trim();
-    if (trimmed.contains('youtube.com') || trimmed.contains('youtu.be')) {
-      try {
-        final uri = Uri.parse(trimmed);
-        if (uri.host.contains('youtu.be')) {
-          final id = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '';
-          if (id.isNotEmpty) return 'https://www.youtube.com/watch?v=$id';
-        }
-        final v = uri.queryParameters['v'];
-        if (v != null && v.isNotEmpty) {
-          return 'https://www.youtube.com/watch?v=$v';
-        }
-      } catch (_) {}
-      return trimmed.split('&').first;
-    }
-    return trimmed;
-  }
-
-  Future<void> _pasteFromClipboard() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    if (data?.text != null && data!.text!.trim().isNotEmpty) {
-      _linkController.text = _sanitizeUrl(data.text!.trim());
-      _resolveLink();
-    }
-  }
-
-  Future<void> _resolveLink() async {
-    final rawUrl = _sanitizeUrl(_linkController.text.trim());
-    _linkController.text = rawUrl;
-    if (rawUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cole a URL de uma música do YouTube ou do Spotify.'),
-          backgroundColor: AppTheme.amberCue,
-        ),
-      );
-      return;
-    }
-
-    setState(() {
-      _isResolvingLink = true;
-      _resolvedLinkData = null;
-      _resolvedYoutubeUrl = null;
-    });
-
-    try {
-      final info = await CloudImporterService.resolveLink(rawUrl);
-
-      setState(() {
-        _resolvedLinkData = info;
-        _resolvedYoutubeUrl = info['youtubeUrl'];
-
-        if (info['title'] != null) {
-          _titleController.text = info['title'];
-        }
-        if (info['artist'] != null) {
-          _artistController.text = info['artist'];
-        }
-        if (info['detectedKey'] != null && _musicalKeys.contains(info['detectedKey'])) {
-          _selectedKey = info['detectedKey'];
-        }
-        if (info['detectedBpm'] != null) {
-          _bpmController.text = info['detectedBpm'].toString();
-        }
-        if (info['detectedTimeSignature'] != null && _timeSignatures.contains(info['detectedTimeSignature'])) {
-          _selectedTimeSignature = info['detectedTimeSignature'];
-        }
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: AppTheme.emeraldSafe, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '⚡ Link identificado: ${_titleController.text} (${_artistController.text})',
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-            backgroundColor: const Color(0xFF1F2937),
-            duration: const Duration(seconds: 3),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        _showCloudConfigOrErrorDialog(e.toString());
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isResolvingLink = false;
-        });
-      }
-    }
-  }
-
-  void _showCloudConfigOrErrorDialog(String errorMsg) {
-    final urlController = TextEditingController(text: CloudImporterService.serviceUrl);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.card,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppTheme.cardBorder),
-        ),
-        title: const Row(
-          children: [
-            Icon(Icons.cloud_off, color: AppTheme.amberCue, size: 22),
-            SizedBox(width: 8),
-            Text(
-              'Serviço na Nuvem (Cloud Importer)',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Não foi possível conectar ao microserviço na nuvem:\n$errorMsg',
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'URL do Cloud Importer:',
-              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primary),
-            ),
-            const SizedBox(height: 6),
-            TextField(
-              controller: urlController,
-              style: const TextStyle(fontSize: 13, color: Colors.white),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: AppTheme.background,
-                hintText: 'https://seu-servico.onrender.com ou http://localhost:3000',
-                hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              '💡 Dica: Suba o microserviço da pasta "cloud_importer" no Render.com gratuitamente ou inicie com "npm start" no computador.',
-              style: TextStyle(fontSize: 11, color: Colors.white38),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Fechar', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primary,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () {
-              CloudImporterService.serviceUrl = urlController.text.trim();
-              Navigator.of(ctx).pop();
-              _resolveLink();
-            },
-            child: const Text('Salvar e Tentar Novamente'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _handleImportFromLink() async {
-    final title = _titleController.text.trim();
-    final artist = _artistController.text.trim();
-    final bpm = int.tryParse(_bpmController.text.trim()) ?? 120;
-    final ytUrl = _sanitizeUrl(_resolvedYoutubeUrl ?? _linkController.text.trim());
-
-    if (title.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Informe o título da música!'), backgroundColor: AppTheme.roseMute),
-      );
-      return;
-    }
-
-    if (ytUrl.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Analise o link do YouTube ou Spotify antes de importar.'), backgroundColor: AppTheme.roseMute),
-      );
-      return;
-    }
-
-    setState(() {
-      _isUploading = true;
-      _uploadProgress = 0.15;
-      _uploadStatusText = 'Extraindo áudio de alta fidelidade na nuvem...';
-    });
-
-    try {
-      setState(() {
-        _uploadProgress = 0.45;
-        _uploadStatusText = 'Convertendo para MP3 (192 kbps) e enviando ao Supabase...';
-      });
-
-      final result = await CloudImporterService.importSong(
-        youtubeUrl: ytUrl,
-        title: title,
-        artist: artist,
-        key: _selectedKey,
-        bpm: bpm,
-        timeSignature: _selectedTimeSignature,
-      );
-
-      setState(() {
-        _uploadProgress = 1.0;
-        _uploadStatusText = 'Música adicionada com sucesso no Acervo!';
-      });
-
-      // Sincroniza o acervo na aplicação
-      context.read<AudioEngine>().syncFromCloudSilently();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: AppTheme.emeraldSafe, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('🎉 Música "$title" importada e salva no Acervo!'),
-                ),
-              ],
-            ),
-            backgroundColor: AppTheme.emeraldSafe,
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
-
-      // Limpa os campos
-      _titleController.clear();
-      _artistController.clear();
-      _linkController.clear();
-      setState(() {
-        _resolvedLinkData = null;
-        _resolvedYoutubeUrl = null;
-        _isUploading = false;
-      });
-
-      widget.onSongSaved?.call();
-    } catch (e) {
-      setState(() {
-        _isUploading = false;
-      });
-      if (mounted) {
-        _showCloudConfigOrErrorDialog(e.toString());
-      }
-    }
-  }
-
-  // ==========================================
   // BUILD PRINCIPAL
   // ==========================================
 
@@ -655,252 +374,6 @@ class _UploadScreenState extends State<UploadScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. SELETOR DE MODO: ARQUIVO LOCAL VS IMPORTAR POR LINK
-              Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.card,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.cardBorder),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
-                        onTap: () => setState(() => _uploadMode = 0),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: _uploadMode == 0 ? AppTheme.primary.withOpacity(0.2) : Colors.transparent,
-                            borderRadius: const BorderRadius.horizontal(left: Radius.circular(12)),
-                            border: Border(
-                              bottom: BorderSide(
-                                color: _uploadMode == 0 ? AppTheme.primary : Colors.transparent,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.folder_open,
-                                size: 16,
-                                color: _uploadMode == 0 ? AppTheme.primary : Colors.white54,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Arquivo Local',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: _uploadMode == 0 ? Colors.white : Colors.white54,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: const BorderRadius.horizontal(right: Radius.circular(12)),
-                        onTap: () => setState(() => _uploadMode = 1),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: _uploadMode == 1 ? AppTheme.emeraldSafe.withOpacity(0.2) : Colors.transparent,
-                            borderRadius: const BorderRadius.horizontal(right: Radius.circular(12)),
-                            border: Border(
-                              bottom: BorderSide(
-                                color: _uploadMode == 1 ? AppTheme.emeraldSafe : Colors.transparent,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.link,
-                                size: 16,
-                                color: _uploadMode == 1 ? AppTheme.emeraldSafe : Colors.white54,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Link YouTube / Spotify',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: _uploadMode == 1 ? Colors.white : Colors.white54,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // =======================================================
-              // MODO 1: UPLOAD POR LINK (YOUTUBE / SPOTIFY)
-              // =======================================================
-              if (_uploadMode == 1) ...[
-                const Text(
-                  'Insira o link de uma música do YouTube ou Spotify. O áudio será baixado em MP3 (192 kbps) e salvo diretamente no Acervo.',
-                  style: TextStyle(fontSize: 12, color: Colors.white54),
-                ),
-                const SizedBox(height: 14),
-
-                // Campo de Link com Botão Colar
-                TextField(
-                  controller: _linkController,
-                  decoration: InputDecoration(
-                    labelText: 'Link do YouTube ou Spotify',
-                    hintText: 'https://youtube.com/watch?v=... ou https://open.spotify.com/track/...',
-                    hintStyle: const TextStyle(fontSize: 11, color: Colors.white30),
-                    prefixIcon: const Icon(Icons.link, color: AppTheme.emeraldSafe, size: 20),
-                    suffixIcon: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_linkController.text.isNotEmpty)
-                          IconButton(
-                            icon: const Icon(Icons.clear, size: 18, color: Colors.white38),
-                            onPressed: () {
-                              setState(() {
-                                _linkController.clear();
-                                _resolvedLinkData = null;
-                                _resolvedYoutubeUrl = null;
-                              });
-                            },
-                          ),
-                        IconButton(
-                          icon: const Icon(Icons.content_paste, size: 18, color: AppTheme.emeraldSafe),
-                          tooltip: 'Colar da área de transferência',
-                          onPressed: _pasteFromClipboard,
-                        ),
-                      ],
-                    ),
-                    filled: true,
-                    fillColor: AppTheme.card,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                ),
-                const SizedBox(height: 10),
-
-                // Botão de Analisar Link
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.emeraldSafe,
-                      side: const BorderSide(color: AppTheme.emeraldSafe, width: 1.5),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: _isResolvingLink
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.emeraldSafe),
-                          )
-                        : const Icon(Icons.search, size: 18),
-                    label: Text(
-                      _isResolvingLink ? 'Analisando link...' : 'Analisar Link e Extrair Dados',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                    ),
-                    onPressed: _isResolvingLink ? null : _resolveLink,
-                  ),
-                ),
-
-                // Preview Card com Capa e Detalhes
-                if (_resolvedLinkData != null) ...[
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppTheme.card,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppTheme.emeraldSafe.withOpacity(0.5)),
-                    ),
-                    child: Row(
-                      children: [
-                        if (_resolvedLinkData!['thumbnail'] != null)
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(8),
-                            child: Image.network(
-                              _resolvedLinkData!['thumbnail'],
-                              width: 60,
-                              height: 60,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, __, ___) => Container(
-                                width: 60,
-                                height: 60,
-                                color: AppTheme.background,
-                                child: const Icon(Icons.music_note, color: Colors.white38),
-                              ),
-                            ),
-                          ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: _resolvedLinkData!['source'] == 'spotify'
-                                          ? const Color(0xFF1DB954).withOpacity(0.2)
-                                          : Colors.red.withOpacity(0.2),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      _resolvedLinkData!['source'] == 'spotify' ? 'SPOTIFY' : 'YOUTUBE',
-                                      style: TextStyle(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                        color: _resolvedLinkData!['source'] == 'spotify'
-                                            ? const Color(0xFF1DB954)
-                                            : Colors.redAccent,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    '${((_resolvedLinkData!['durationSeconds'] ?? 240) / 60).floor()}:${((_resolvedLinkData!['durationSeconds'] ?? 240) % 60).toString().padLeft(2, '0')} min',
-                                    style: const TextStyle(fontSize: 10, color: Colors.white54),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _resolvedLinkData!['title'] ?? '',
-                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                _resolvedLinkData!['artist'] ?? '',
-                                style: const TextStyle(fontSize: 11, color: Colors.white70),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                const SizedBox(height: 16),
-              ],
 
               // =======================================================
               // CAMPOS COMUNS (TÍTULO, ARTISTA, TOM, BPM, COMPASSO)
@@ -937,33 +410,32 @@ class _UploadScreenState extends State<UploadScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text('Tom, BPM e Compasso', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  if (_uploadMode == 0)
-                    GestureDetector(
-                      onTap: _autoDetectFromSelectedFiles,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppTheme.amberCue.withOpacity(0.18),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: AppTheme.amberCue.withOpacity(0.5)),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.auto_awesome, size: 13, color: AppTheme.amberCue),
-                            SizedBox(width: 4),
-                            Text(
-                              'Auto-Detectar',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.amberCue,
-                              ),
+                  GestureDetector(
+                    onTap: _autoDetectFromSelectedFiles,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.amberCue.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: AppTheme.amberCue.withOpacity(0.5)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.auto_awesome, size: 13, color: AppTheme.amberCue),
+                          SizedBox(width: 4),
+                          Text(
+                            'Auto-Detectar',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.amberCue,
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),
@@ -1048,11 +520,7 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
               const SizedBox(height: 16),
 
-              // =======================================================
-              // MODO 0: ARQUIVOS LOCAIS (MULTITRACK OU FAIXA ÚNICA)
-              // =======================================================
-              if (_uploadMode == 0) ...[
-                const Text('Tipo de Áudio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              const Text('Tipo de Áudio', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 Row(
                   children: [
@@ -1213,7 +681,6 @@ class _UploadScreenState extends State<UploadScreen> {
                     },
                   ),
                 ],
-              ],
 
               const SizedBox(height: 20),
 
@@ -1221,15 +688,15 @@ class _UploadScreenState extends State<UploadScreen> {
               if (_isUploading) ...[
                 LinearProgressIndicator(
                   value: _uploadProgress,
-                  color: _uploadMode == 1 ? AppTheme.emeraldSafe : AppTheme.primary,
+                  color: AppTheme.primary,
                   backgroundColor: AppTheme.cardBorder,
                 ),
                 const SizedBox(height: 8),
                 Text(
                   _uploadStatusText,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontSize: 11,
-                    color: _uploadMode == 1 ? AppTheme.emeraldSafe : AppTheme.primary,
+                    color: AppTheme.primary,
                     fontFamily: 'monospace',
                   ),
                 ),
@@ -1241,11 +708,9 @@ class _UploadScreenState extends State<UploadScreen> {
                 width: double.infinity,
                 height: 50,
                 child: ElevatedButton(
-                  onPressed: _isUploading
-                      ? null
-                      : (_uploadMode == 0 ? _handleSaveLocalSong : _handleImportFromLink),
+                  onPressed: _isUploading ? null : _handleSaveLocalSong,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _uploadMode == 1 ? AppTheme.emeraldSafe : AppTheme.primary,
+                    backgroundColor: AppTheme.primary,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
@@ -1255,16 +720,14 @@ class _UploadScreenState extends State<UploadScreen> {
                           height: 22,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
-                      : Row(
+                      : const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(_uploadMode == 1 ? Icons.cloud_download : Icons.save, size: 18),
-                            const SizedBox(width: 8),
+                            Icon(Icons.save, size: 18),
+                            SizedBox(width: 8),
                             Text(
-                              _uploadMode == 1
-                                  ? 'Baixar e Salvar no Acervo da Banda ➔'
-                                  : 'Salvar no Acervo da Banda ➔',
-                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                              'Salvar no Acervo da Banda ➔',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
