@@ -1,4 +1,4 @@
-name: Build RealTracks (Android, Windows, iOS & Web PWA)
+name: Build RealTracks (Windows, macOS, Android & Web PWA)
 
 on:
   push:
@@ -133,7 +133,61 @@ jobs:
           if-no-files-found: error
 
   # ==========================================
-  # JOB 3: BUILD WEB PWA (GITHUB PAGES)
+  # JOB 3: BUILD DO MACOS (.dmg & .zip)
+  # ==========================================
+  build-macos:
+    name: Build macOS Desktop & DMG Installer
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Enable macOS Desktop & Generate Platform
+        run: |
+          flutter config --enable-macos-desktop
+          flutter create --project-name realtracks --org com.realtracks.app --platforms=macos .
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Code Diagnostics
+        run: flutter analyze || true
+
+      - name: Build macOS Release App
+        run: |
+          flutter build macos --release --no-tree-shake-icons
+
+      - name: Package Portable ZIP
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -r -y RealTracks-macOS-Portable.zip realtracks.app
+          mv RealTracks-macOS-Portable.zip $GITHUB_WORKSPACE/
+
+      - name: Create macOS DMG Installer
+        run: |
+          mkdir -p dmg_root
+          cp -R "build/macos/Build/Products/Release/realtracks.app" dmg_root/RealTracks.app
+          ln -s /Applications dmg_root/Applications
+          hdiutil create -volname "RealTracks" -srcfolder dmg_root -ov -format UDZO RealTracks-macOS.dmg
+          ls -lh RealTracks-macOS.dmg
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealTracks-macOS-Builds
+          path: |
+            RealTracks-macOS.dmg
+            RealTracks-macOS-Portable.zip
+          if-no-files-found: error
+
+  # ==========================================
+  # JOB 4: BUILD WEB PWA (GITHUB PAGES)
   # ==========================================
   build-web:
     name: Build & Deploy Web PWA
@@ -177,63 +231,12 @@ jobs:
           publish_dir: ./build/web
 
   # ==========================================
-  # JOB 4: BUILD DO IOS (OPCIONAL)
-  # ==========================================
-  build-ios:
-    name: Build iOS (sem precisar de Mac local)
-    runs-on: macos-latest
-    continue-on-error: true
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Generate iOS Native Platform
-        run: flutter create --offline . --project-name realtracks --org com.realtracks.app --platforms=ios || flutter create . --project-name realtracks --org com.realtracks.app --platforms=ios
-
-      - name: Install Dependencies
-        run: flutter pub get
-
-      - name: Code Diagnostics
-        run: flutter analyze || true
-
-      - name: Build iOS App
-        run: |
-          flutter build ios --release --no-codesign || {
-            echo "Aviso: Build iOS completo com avisos de assinatura. Prosseguindo..."
-            exit 0
-          }
-
-      - name: Compress iOS App Bundle
-        run: |
-          if [ -d "build/ios/iphoneos/Runner.app" ]; then
-            cd build/ios/iphoneos
-            mkdir -p Payload
-            cp -r Runner.app Payload/
-            zip -r RealTracks-iOS.ipa Payload
-          else
-            echo "Runner.app não assinado, pulando empacotamento IPA."
-          fi
-
-      - name: Upload iOS Payload
-        uses: actions/upload-artifact@v4
-        with:
-          name: RealTracks-iOS-Build
-          path: build/ios/iphoneos/RealTracks-iOS.ipa
-          if-no-files-found: warn
-
-  # ==========================================
   # JOB 5: GITHUB RELEASE UNIFICADO
   # ==========================================
   publish-release:
     name: Publish Direct Installers to GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-android, build-windows]
+    needs: [build-android, build-windows, build-macos]
     if: always() && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout Repository
@@ -246,6 +249,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: RealTracks-Windows-Builds
+          path: release-files
+        continue-on-error: true
+
+      - name: Download macOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: RealTracks-macOS-Builds
           path: release-files
         continue-on-error: true
 
@@ -263,15 +273,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "RealTracks - Versão Mais Recente (Instaladores Windows & Android)"
+          name: "RealTracks - Versão Mais Recente (Windows, Mac & Android)"
           body: |
             ## 🎵 RealTracks - Aplicativo Oficial para a Banda
 
-            Baixe o instalador direto para o seu dispositivo:
+            Baixe o instalador direto para o seu computador ou celular:
 
-            ### 🪟 Windows Desktop (Computador / Notebook da Igreja):
+            ### 🪟 Windows Desktop (Computador / Notebook):
             * **[RealTracks-Windows-Installer.exe](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Installer.exe)** *(Instalador oficial: cria atalho na Área de Trabalho e no Menu Iniciar)*
-            * **[RealTracks-Windows-Portable.zip](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Portable.zip)** *(Versão portátil: extraia em qualquer pasta ou pendrive e abra o `realtracks.exe`)*
+            * **[RealTracks-Windows-Portable.zip](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Portable.zip)** *(Versão portátil: extraia em qualquer pasta e abra o `realtracks.exe`)*
+
+            ### 🍏 Apple macOS Desktop (MacBook, iMac, Mac Mini):
+            * **[RealTracks-macOS.dmg](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-macOS.dmg)** *(Instalador clássico do Mac: abra e arraste para a pasta Aplicativos)*
+            * **[RealTracks-macOS-Portable.zip](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-macOS-Portable.zip)** *(Versão compactada `.app`)*
 
             ### 📱 Android (Celular / Tablet):
             * **[app-release.apk](https://github.com/chronus07/realtrack/releases/download/latest/app-release.apk)** *(Instalador APK direto)*
