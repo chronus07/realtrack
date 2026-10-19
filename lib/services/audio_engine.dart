@@ -571,15 +571,16 @@ class AudioEngine extends ChangeNotifier {
     _isLoadingAudio = false;
     WakelockPlus.enable();
 
-    // Retoma todas as vozes simultaneamente no motor C++ SoLoud
+    await _applyAllStemsAudioSettings();
+    _applyPitchOffsetToAudio();
+
+    // Retoma todas as vozes simultaneamente no motor C++ SoLoud já afinadas
     for (final handle in _stemHandles.values) {
       try {
         SoLoud.instance.setPause(handle, false);
       } catch (_) {}
     }
 
-    await _applyAllStemsAudioSettings();
-    _applyPitchOffsetToAudio();
     _startPlaybackClock();
     notifyListeners();
   }
@@ -857,8 +858,9 @@ class AudioEngine extends ChangeNotifier {
           final source = _stemSources[stem.id];
           if (source == null) continue;
 
-          // Pré-ativa o filtro no AudioSource antes do play para instrumentos se houver transposição
-          if (!kIsWeb && _pitchOffset != 0 && !stem.isCue) {
+          // Pré-ativa o filtro no AudioSource antes do play se houver transposição
+          // (Inclusive no Click e Guia, com fator 1.0, para igualar milimetricamente o atraso de buffer)
+          if (!kIsWeb && _pitchOffset != 0) {
             try {
               if (!source.filters.pitchShiftFilter.isActive) {
                 source.filters.pitchShiftFilter.activate();
@@ -900,14 +902,16 @@ class AudioEngine extends ChangeNotifier {
           _stemHandles[stem.id] = handle;
         }
 
-        // Dispara todas as faixas simultaneamente no motor de áudio C++
+        // Aplica o tom em todas as faixas ANTES de despausar, garantindo sincronismo sample-accurate
+        _applyPitchOffsetToAudio();
+
+        // Dispara todas as faixas simultaneamente no motor de áudio C++ já afinadas
         for (final handle in _stemHandles.values) {
           try {
             SoLoud.instance.setPause(handle, false);
           } catch (_) {}
         }
 
-        _applyPitchOffsetToAudio();
         _startPlaybackClock();
       }
     } catch (e) {
@@ -1061,7 +1065,34 @@ class AudioEngine extends ChangeNotifier {
       song.pitchOffsetSemitones = _pitchOffset;
       song.currentKey = PitchShifterService.transposeNote(song.originalKey, _pitchOffset);
     }
+
+    final bool wasPlaying = _isPlaying;
+    if (wasPlaying && _stemHandles.isNotEmpty) {
+      // Pausa momentaneamente para aplicar o novo pitch sem dessincronizar buffers
+      for (final h in _stemHandles.values) {
+        try {
+          SoLoud.instance.setPause(h, true);
+        } catch (_) {}
+      }
+    }
+
     _applyPitchOffsetToAudio();
+
+    if (wasPlaying && _stemHandles.isNotEmpty) {
+      // Re-alinha todas as faixas na exata mesma posição antes de despausar
+      final currentPos = Duration(milliseconds: (_currentPositionSeconds * 1000).toInt());
+      for (final h in _stemHandles.values) {
+        try {
+          SoLoud.instance.seek(h, currentPos);
+        } catch (_) {}
+      }
+      for (final h in _stemHandles.values) {
+        try {
+          SoLoud.instance.setPause(h, false);
+        } catch (_) {}
+      }
+    }
+
     notifyListeners();
   }
 
@@ -1103,16 +1134,14 @@ class AudioEngine extends ChangeNotifier {
             SoLoud.instance.filters.pitchShiftFilter.activate();
           }
           SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
-          try {
-            SoLoud.instance.filters.pitchShiftFilter.semitones.value = _pitchOffset.toDouble();
-          } catch (_) {}
         } catch (e) {
           debugPrint('Aviso ao aplicar pitchShiftFilter global: $e');
         }
       } else {
         // 3. Em plataformas nativas com multitrack:
-        // Aplica individualmente nas faixas da banda (baixo, guitarra, voz, teclado, etc.)
-        // e MANTÉM Click e Guia (CUE) 100% INTACTOS e no tom/tempo original!
+        // Aplica nas faixas musicais com o fator de transposição (factor),
+        // E no Click / Guia (CUE) com fator 1.0 (neutro),
+        // para que TODAS as pistas passem pelo MESMO buffer de filtro e permaneçam 100% SINCRONIZADAS!
         bool appliedToStems = false;
         if (song != null) {
           for (final stem in song.stems) {
@@ -1120,32 +1149,26 @@ class AudioEngine extends ChangeNotifier {
             if (source == null) continue;
             final handle = _stemHandles[stem.id];
 
-            if (stem.isCue) {
-              // Click e Guia NUNCA sofrem pitch shift
-              try {
-                if (source.filters.pitchShiftFilter.isActive) {
-                  source.filters.pitchShiftFilter.deactivate();
-                }
-              } catch (_) {}
-            } else {
-              // Faixas musicais da banda
-              try {
-                if (!source.filters.pitchShiftFilter.isActive) {
-                  source.filters.pitchShiftFilter.activate();
-                }
-                source.filters.pitchShiftFilter.shift(soundHandle: handle).value = factor;
-                try {
-                  source.filters.pitchShiftFilter.semitones(soundHandle: handle).value = _pitchOffset.toDouble();
-                } catch (_) {}
-                appliedToStems = true;
-              } catch (stemErr) {
-                debugPrint('Tentativa de filtro no stem ${stem.name}: $stemErr');
+            try {
+              if (!source.filters.pitchShiftFilter.isActive) {
+                source.filters.pitchShiftFilter.activate();
               }
+              // Se for Click ou Guia (CUE), mantém o tom original (fator 1.0)
+              // mas com a mesma latência algorítmica para não adiantar o click em relação à música
+              final stemFactor = stem.isCue ? 1.0 : factor;
+              if (handle != null) {
+                source.filters.pitchShiftFilter.shift(soundHandle: handle).value = stemFactor;
+              } else {
+                source.filters.pitchShiftFilter.shift().value = stemFactor;
+              }
+              appliedToStems = true;
+            } catch (stemErr) {
+              debugPrint('Tentativa de filtro no stem ${stem.name}: $stemErr');
             }
           }
         }
 
-        // Se os filtros individuais por faixa funcionaram, desativa o filtro global para não duplicar efeito nem afetar o Click
+        // Se os filtros individuais por faixa funcionaram, desativa o filtro global para não duplicar efeito
         if (appliedToStems) {
           try {
             if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
@@ -1159,9 +1182,6 @@ class AudioEngine extends ChangeNotifier {
               SoLoud.instance.filters.pitchShiftFilter.activate();
             }
             SoLoud.instance.filters.pitchShiftFilter.shift.value = factor;
-            try {
-              SoLoud.instance.filters.pitchShiftFilter.semitones.value = _pitchOffset.toDouble();
-            } catch (_) {}
           } catch (_) {}
         }
       }
