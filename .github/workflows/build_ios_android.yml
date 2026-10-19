@@ -282,19 +282,36 @@ jobs:
       - name: Code Diagnostics
         run: flutter analyze || true
 
-      - name: Build Flutter Web (Fresh cache busting)
+      - name: Build Flutter Web (Fresh cache busting for Firebase Hosting)
         run: |
-          flutter build web --release --base-href /realtrack/ --no-tree-shake-icons
+          flutter build web --release --base-href / --no-tree-shake-icons
           rm -f build/web/flutter_service_worker.js || true
 
       - name: Copy Extra Web Files
         run: cp web/simulator.html build/web/simulator.html || true
+
+      - name: Upload Web Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealTracks-Web-Build
+          path: build/web
+          if-no-files-found: error
+
+      - name: Deploy to Firebase Hosting (Automatic CI/CD)
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_REALTRACK_APP }}'
+          channelId: live
+          projectId: realtrack-app
+        continue-on-error: true
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./build/web
+        continue-on-error: true
 
   # ==========================================
   # JOB 6: GITHUB RELEASE UNIFICADO
@@ -350,7 +367,12 @@ jobs:
           body: |
             ## 🎵 RealTracks - Aplicativo Oficial para a Banda
 
-            Baixe o instalador direto para o seu computador ou celular:
+            Acesse pela Web ou baixe o aplicativo nativo para seu aparelho:
+
+            ### 🌐 Versão Web Oficial:
+            * **https://realtrack-app.web.app/** (ou https://realtrack-app.firebaseapp.com/)
+
+            ---
 
             ### 🪟 Windows Desktop (Computador / Notebook):
             * **[RealTracks-Windows-Installer.exe](https://github.com/chronus07/realtrack/releases/download/latest/RealTracks-Windows-Installer.exe)** *(Instalador oficial: cria atalho na Área de Trabalho e no Menu Iniciar)*
@@ -365,9 +387,6 @@ jobs:
 
             ### 🤖 Android (Celular / Tablet):
             * **[app-release.apk](https://github.com/chronus07/realtrack/releases/download/latest/app-release.apk)** *(Instalador APK direto)*
-
-            ### 🌐 Versão Web:
-            * Acesse pelo navegador: **https://chronus07.github.io/realtrack/**
           draft: false
           prerelease: false
           files: release-files/*
