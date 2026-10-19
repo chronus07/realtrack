@@ -11,6 +11,8 @@ class AudioCacheService {
   static final Set<String> _activeDownloads = {};
   static final Map<String, String> _cachedPaths = {};
   static final Map<String, Uint8List> _webCache = {};
+  static final Map<String, bool> _songCacheStatus = {};
+  static Directory? _cachedBaseDir;
   static bool _isPrefetching = false;
 
   static double getProgress(String storagePath) => _downloadProgress[storagePath] ?? 0.0;
@@ -42,13 +44,15 @@ class AudioCacheService {
     _webCache.removeWhere((path, _) => !activePaths.contains(path));
   }
 
-  /// Retorna o diretório base de cache de áudio permanente no aparelho
+  /// Retorna o diretório base de cache de áudio permanente no aparelho (memorizado para evitar IPC repetido)
   static Future<Directory> _getCacheDirectory() async {
+    if (_cachedBaseDir != null) return _cachedBaseDir!;
     final docsDir = await getApplicationDocumentsDirectory();
     final cacheDir = Directory('${docsDir.path}/realtracks_audio');
     if (!await cacheDir.exists()) {
       await cacheDir.create(recursive: true);
     }
+    _cachedBaseDir = cacheDir;
     return cacheDir;
   }
 
@@ -93,13 +97,27 @@ class AudioCacheService {
       }
       return true;
     }
+
+    if (_songCacheStatus[song.id] == true) {
+      return true;
+    }
+
     for (final stem in song.stems) {
       if (stem.filePath != null && stem.filePath!.isNotEmpty) {
         final local = await getLocalPathIfExists(stem.filePath!);
-        if (local == null) return false;
+        if (local == null) {
+          _songCacheStatus[song.id] = false;
+          return false;
+        }
       }
     }
+    _songCacheStatus[song.id] = true;
     return true;
+  }
+
+  /// Invalida o status de cache em memória para forçar nova verificação
+  static void invalidateSongCacheStatus(String songId) {
+    _songCacheStatus.remove(songId);
   }
 
   /// Verifica se todas as músicas de uma playlist estão baixadas
@@ -281,6 +299,7 @@ class AudioCacheService {
         onProgress?.call(completed, total, completed / total);
       }));
     }
+    _songCacheStatus[song.id] = true;
   }
 
   /// Baixa a playlist inteira em segundo plano
@@ -367,6 +386,7 @@ class AudioCacheService {
     if (kIsWeb) return;
     try {
       _cachedPaths.clear();
+      _songCacheStatus.clear();
       final dir = await _getCacheDirectory();
       if (await dir.exists()) {
         await dir.delete(recursive: true);
