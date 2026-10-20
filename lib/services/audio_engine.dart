@@ -13,7 +13,6 @@ import '../models/setlist.dart';
 import 'audio_cache_service.dart';
 import 'pitch_shifter.dart';
 import 'supabase_service.dart';
-import 'web_audio_helper.dart';
 
 class AudioEngine extends ChangeNotifier {
   // ACERVO GERAL (Sincronizado com o Supabase)
@@ -576,7 +575,6 @@ class AudioEngine extends ChangeNotifier {
       return;
     }
 
-    ensureWebAudioUnlocked();
     _isPlaying = true;
     _isLoadingAudio = false;
     WakelockPlus.enable();
@@ -590,7 +588,6 @@ class AudioEngine extends ChangeNotifier {
         SoLoud.instance.setPause(handle, false);
       } catch (_) {}
     }
-    ensureWebAudioUnlocked();
 
     _startPlaybackClock();
     notifyListeners();
@@ -637,8 +634,6 @@ class AudioEngine extends ChangeNotifier {
     final song = currentSong;
     if (song == null) return;
     if (_isLoadingAudio) return;
-
-    ensureWebAudioUnlocked();
 
     _isLoadingAudio = true;
     _isPlaying = true;
@@ -909,16 +904,12 @@ class AudioEngine extends ChangeNotifier {
         // Aplica o tom em todas as faixas ANTES de despausar, garantindo sincronismo sample-accurate
         _applyPitchOffsetToAudio();
 
-        ensureWebAudioUnlocked();
-
         // Dispara todas as faixas simultaneamente no motor de áudio C++ já afinadas
         for (final handle in _stemHandles.values) {
           try {
             SoLoud.instance.setPause(handle, false);
           } catch (_) {}
         }
-
-        ensureWebAudioUnlocked();
 
         _startPlaybackClock();
       }
