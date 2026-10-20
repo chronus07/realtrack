@@ -1,0 +1,39 @@
+# RealTracks - Regras e Contexto para o Roo Code (.clinerules)
+
+Você é o assistente técnico de desenvolvimento trabalhando no projeto **RealTracks**.
+Siga rigorosamente as diretrizes abaixo em todas as alterações e tarefas:
+
+## 1. Visão Geral do Projeto
+- **Nome**: RealTracks
+- **Objetivo**: Disparador profissional de Multitracks, player de áudio sincronizado e gestor de repertório/playlists para bandas e igrejas.
+- **Plataformas suportadas**: Android, iOS (via TestFlight / IPA), Web (PWA / Firebase Hosting), Windows e macOS.
+- **Linguagem / Framework**: Flutter (Dart) com gerenciamento de estado via `Provider`.
+- **Backend / Nuvem**: Supabase (Autenticação, Banco de Dados PostgreSQL e Storage para arquivos de áudio).
+- **Idioma padrão de comunicação e commits**: Português do Brasil (pt-BR).
+
+## 2. Arquitetura do Motor de Áudio (`AudioEngine`)
+- **Engine**: Utiliza `flutter_soloud` (motor C++ de alta performance, baixa latência e precisão sample-accurate).
+- **Modo de Carregamento (`LoadMode`)**:
+  - SEMPRE usar `LoadMode.memory` por padrão para carregar stems multitrack na memória RAM.
+  - NUNCA forçar `LoadMode.disk` em 8 a 12 stems simultâneos no Android/iOS, pois causa sobrecarga de I/O na memória flash e travamento/queda de buffers de áudio.
+  - Manter fallback resiliente: se `LoadMode.memory` falhar em aparelhos antigos com pouca RAM, recorrer a `LoadMode.disk`.
+- **Transposição de Tom / Pitch Shifting**:
+  - SEMPRE utilizar o **Filtro Master Bus** (`SoLoud.instance.filters.pitchShiftFilter`).
+  - NUNCA ativar filtros de pitch shift individuais por pista (`source.filters.pitchShiftFilter`), pois rodar 10 FFTs simultâneos sobrecarrega 100% da CPU mobile e causa engasgos severos.
+  - O filtro Master garante que todas as pistas (Click, Guia e Banda) permaneçam 100% em fase, com sincronismo matemático perfeito e uso de CPU < 1%.
+  - Quando a afinação for original (`pitchOffset == 0`), o filtro Master deve ser desativado para áudio 100% puro.
+- **Cabo Y / Modo Split**:
+  - Canal Esquerdo (L / Pan -1.0): Click e Guia (CUE).
+  - Canal Direito (R / Pan +1.0): Banda / Instrumentos (P.A.).
+  - Modo Estéreo (Pan 0.0): Todas as faixas no centro.
+
+## 3. Cache e Armazenamento Local
+- Gerenciado por `AudioCacheService`.
+- Memorizar o diretório de cache (`_cachedBaseDir`) em RAM para evitar chamadas repetitivas via IPC / Platform Channels (`getApplicationDocumentsDirectory`).
+- Manter o status de músicas cacheadas em memória (`_songCacheStatus`) para evitar loops assíncronos no build de widgets (`FutureBuilder`).
+
+## 4. Estilo de Código e Boas Práticas
+- Manter integridade de documentação e comentários existentes.
+- Utilizar os temas e paletas centrais de `AppTheme` (cores escuras profissionais, cards com bordas suaves, tags coloridas).
+- Evitar rebuilds desnecessários de listas longas; usar `const`, `ListView.separated` e memorizações.
+- Ao atualizar modelos ou estrutura, manter retrocompatibilidade com o banco de dados Supabase e o cache offline local.
