@@ -39,6 +39,151 @@
       });
     }
   </script>
+
+  <!-- iOS Safari / WebKit Web Audio Stabilizer & Silent-Switch Bypass -->
+  <script>
+    (function() {
+      // 1. Coleção de todos os contextos Web Audio criados no navegador
+      const allAudioContexts = new Set();
+      window._realTracksAudioContexts = allAudioContexts;
+
+      // 2. Elemento HTML5 de áudio silencioso para forçar o WebKit iOS para a categoria "Playback"
+      // (Permite que o áudio toque no alto-falante mesmo se a chave lateral de silêncio estiver ativada)
+      let silentAudioEl = null;
+      function getSilentAudio() {
+        if (!silentAudioEl) {
+          silentAudioEl = document.createElement('audio');
+          silentAudioEl.setAttribute('playsinline', '');
+          silentAudioEl.setAttribute('webkit-playsinline', '');
+          silentAudioEl.setAttribute('preload', 'auto');
+          silentAudioEl.loop = true;
+          // WAV puro de 48 bytes com silêncio estéreo PCM
+          silentAudioEl.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+        }
+        return silentAudioEl;
+      }
+
+      // 3. Função mestre de desbloqueio de áudio em tempo real
+      function unlockRealTracksAudio() {
+        // A. Categoria Playback no iOS Safari moderno (iOS 16.4+)
+        if ('audioSession' in navigator) {
+          try {
+            navigator.audioSession.type = 'playback';
+          } catch (e) {}
+        }
+
+        // B. Toca áudio silencioso dentro do gesto para elevar a sessão do Safari
+        try {
+          const el = getSilentAudio();
+          if (el.paused) {
+            el.play().catch(function() {});
+          }
+        } catch (e) {}
+
+        // C. Retoma todos os AudioContexts rastreados
+        allAudioContexts.forEach(function(ctx) {
+          if (ctx && (ctx.state === 'suspended' || ctx.state === 'interrupted')) {
+            try {
+              ctx.resume().catch(function() {});
+            } catch (e) {}
+          }
+        });
+
+        // D. Retoma instâncias do miniaudio (motor C++ do SoLoud)
+        if (window.miniaudio && Array.isArray(window.miniaudio.devices)) {
+          window.miniaudio.devices.forEach(function(device) {
+            if (device && device.webaudio && (device.webaudio.state === 'suspended' || device.webaudio.state === 'interrupted')) {
+              try {
+                device.webaudio.resume().catch(function() {});
+              } catch (e) {}
+            }
+          });
+        }
+      }
+
+      window.resumeRealTracksAudio = unlockRealTracksAudio;
+
+      // 4. Intercepta AudioContext para evitar que o SoLoud/miniaudio congele o áudio no Safari
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        // Bypassa o método suspend() para impedir que o miniaudio ponha o contexto para dormir
+        // No iOS Safari, se o contexto for suspenso, ele não pode ser acordado após downloads longos sem novo toque.
+        const originalSuspend = AudioCtx.prototype.suspend;
+        AudioCtx.prototype.suspend = function() {
+          return Promise.resolve();
+        };
+
+        const ProxiedAudioContext = function(...args) {
+          const ctx = new AudioCtx(...args);
+          allAudioContexts.add(ctx);
+
+          if (ctx.state === 'suspended') {
+            try {
+              ctx.resume().catch(function() {});
+            } catch (e) {}
+          }
+
+          ctx.addEventListener('statechange', function() {
+            if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+              unlockRealTracksAudio();
+            }
+          });
+
+          return ctx;
+        };
+        ProxiedAudioContext.prototype = AudioCtx.prototype;
+        window.AudioContext = ProxiedAudioContext;
+        if (window.webkitAudioContext) {
+          window.webkitAudioContext = ProxiedAudioContext;
+        }
+      }
+
+      // 5. Intercepta window.miniaudio para blindar contra remoção prematura de event listeners
+      let _miniaudio = undefined;
+      try {
+        Object.defineProperty(window, 'miniaudio', {
+          configurable: true,
+          enumerable: true,
+          get: function() { return _miniaudio; },
+          set: function(val) {
+            _miniaudio = val;
+            if (val && typeof val === 'object') {
+              const origUnlock = val.unlock;
+              val.unlock = function() {
+                unlockRealTracksAudio();
+                if (typeof origUnlock === 'function') {
+                  try { origUnlock.apply(this, arguments); } catch (e) {}
+                }
+              };
+            }
+          }
+        });
+      } catch (e) {}
+
+      // 6. Ouvintes de eventos com capture: true em window e document
+      // Disparam instantaneamente ao primeiro toque do dedo no iPhone
+      const unlockEvents = ['touchstart', 'touchend', 'click', 'pointerdown'];
+      unlockEvents.forEach(function(eventType) {
+        window.addEventListener(eventType, unlockRealTracksAudio, { capture: true, passive: true });
+        document.addEventListener(eventType, unlockRealTracksAudio, { capture: true, passive: true });
+      });
+
+      // 7. Polling de segurança para retomar se o Safari interromper o áudio
+      setInterval(function() {
+        allAudioContexts.forEach(function(ctx) {
+          if (ctx && ctx.state === 'suspended') {
+            try { ctx.resume().catch(function() {}); } catch (e) {}
+          }
+        });
+      }, 500);
+
+      document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+          unlockRealTracksAudio();
+        }
+      });
+    })();
+  </script>
 </head>
 <body>
   <!-- flutter_soloud WebAssembly audio engine loader -->

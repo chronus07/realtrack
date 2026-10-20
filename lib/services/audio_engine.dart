@@ -13,6 +13,7 @@ import '../models/setlist.dart';
 import 'audio_cache_service.dart';
 import 'pitch_shifter.dart';
 import 'supabase_service.dart';
+import 'web_audio_helper.dart';
 
 class AudioEngine extends ChangeNotifier {
   // ACERVO GERAL (Sincronizado com o Supabase)
@@ -575,6 +576,7 @@ class AudioEngine extends ChangeNotifier {
       return;
     }
 
+    ensureWebAudioUnlocked();
     _isPlaying = true;
     _isLoadingAudio = false;
     WakelockPlus.enable();
@@ -588,6 +590,7 @@ class AudioEngine extends ChangeNotifier {
         SoLoud.instance.setPause(handle, false);
       } catch (_) {}
     }
+    ensureWebAudioUnlocked();
 
     _startPlaybackClock();
     notifyListeners();
@@ -634,6 +637,8 @@ class AudioEngine extends ChangeNotifier {
     final song = currentSong;
     if (song == null) return;
     if (_isLoadingAudio) return;
+
+    ensureWebAudioUnlocked();
 
     _isLoadingAudio = true;
     _isPlaying = true;
@@ -710,25 +715,25 @@ class AudioEngine extends ChangeNotifier {
       ).toList();
 
       if (stemsToLoad.isNotEmpty) {
-        // Pré-cacheia apenas as faixas pendentes caso necessário
-        final isCached = await AudioCacheService.isSongFullyCached(song);
-        if (!isCached) {
-          _loadingStatus = kIsWeb
-              ? 'Carregando faixas em alta fidelidade...'
-              : 'Garantindo cache local para sincronismo zero-latência...';
-          _loadingProgress = 0.05;
-          notifyListeners();
+        // Pré-cacheia apenas no armazenamento local em plataformas nativas (Android / iOS / Desktop)
+        // No navegador Web, cada faixa é transmitida diretamente para o SoLoud no loop abaixo,
+        // economizando 50% do tempo de carregamento e eliminando picos de memória RAM no Safari.
+        if (!kIsWeb) {
+          final isCached = await AudioCacheService.isSongFullyCached(song);
+          if (!isCached) {
+            _loadingStatus = 'Garantindo cache local para sincronismo zero-latência...';
+            _loadingProgress = 0.05;
+            notifyListeners();
 
-          await AudioCacheService.downloadSong(
-            song,
-            onProgress: (done, total, pct) {
-              _loadingStatus = kIsWeb
-                  ? 'Carregando na memória: $done/$total (${(pct * 100).toInt()}%)...'
-                  : 'Salvando no aparelho: $done/$total (${(pct * 100).toInt()}%)...';
-              _loadingProgress = pct;
-              notifyListeners();
-            },
-          );
+            await AudioCacheService.downloadSong(
+              song,
+              onProgress: (done, total, pct) {
+                _loadingStatus = 'Salvando no aparelho: $done/$total (${(pct * 100).toInt()}%)...';
+                _loadingProgress = pct;
+                notifyListeners();
+              },
+            );
+          }
         }
 
         // Carrega pistas sequencialmente (1 a 1) para evitar picos de memória e I/O
@@ -904,12 +909,16 @@ class AudioEngine extends ChangeNotifier {
         // Aplica o tom em todas as faixas ANTES de despausar, garantindo sincronismo sample-accurate
         _applyPitchOffsetToAudio();
 
+        ensureWebAudioUnlocked();
+
         // Dispara todas as faixas simultaneamente no motor de áudio C++ já afinadas
         for (final handle in _stemHandles.values) {
           try {
             SoLoud.instance.setPause(handle, false);
           } catch (_) {}
         }
+
+        ensureWebAudioUnlocked();
 
         _startPlaybackClock();
       }
