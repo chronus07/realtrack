@@ -153,6 +153,48 @@ jobs:
           flutter config --enable-macos-desktop
           flutter create --project-name realtracks --org com.realtracks.app --platforms=macos .
 
+      - name: Configure macOS Entitlements & CoreAudio Permissions
+        run: |
+          # 1. Configura Entitlements (Desabilita App Sandbox para distribuição direta DMG e libera Rede e Áudio)
+          for ENT in macos/Runner/Release.entitlements macos/Runner/DebugProfile.entitlements; do
+            mkdir -p $(dirname "$ENT")
+            cat << 'EOF' > "$ENT"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.app-sandbox</key>
+              <false/>
+              <key>com.apple.security.network.client</key>
+              <true/>
+              <key>com.apple.security.network.server</key>
+              <true/>
+              <key>com.apple.security.device.audio-input</key>
+              <true/>
+              <key>com.apple.security.files.user-selected.read-write</key>
+              <true/>
+              <key>com.apple.security.files.downloads.read-write</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          done
+
+          # 2. Configura Info.plist com descrições de permissão e liberação de conexões de áudio
+          PLIST="macos/Runner/Info.plist"
+          if [ -f "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 'O RealTracks necessita de acesso ao áudio para reprodução e sincronização de multitracks.'" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName RealTracks" "$PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string RealTracks" "$PLIST" 2>/dev/null || true
+          fi
+
+          # 3. Configura Podfile para garantir versão mínima compatível de CoreAudio
+          PODFILE="macos/Podfile"
+          if [ -f "$PODFILE" ]; then
+            sed -i '' "s/# platform :osx, '10.14'/platform :osx, '10.15'/g" "$PODFILE" || true
+          fi
+
       - name: Install Dependencies
         run: flutter pub get
 
@@ -166,6 +208,7 @@ jobs:
       - name: Package Portable ZIP
         run: |
           cd build/macos/Build/Products/Release
+          codesign --force --deep --sign - --entitlements "$GITHUB_WORKSPACE/macos/Runner/Release.entitlements" realtracks.app || true
           zip -r -y RealTracks-macOS-Portable.zip realtracks.app
           mv RealTracks-macOS-Portable.zip $GITHUB_WORKSPACE/
 
@@ -174,6 +217,7 @@ jobs:
           mkdir -p dmg_root
           cp -R "build/macos/Build/Products/Release/realtracks.app" dmg_root/RealTracks.app
           ln -s /Applications dmg_root/Applications
+          codesign --force --deep --sign - --entitlements macos/Runner/Release.entitlements "dmg_root/RealTracks.app" || true
           hdiutil create -volname "RealTracks" -srcfolder dmg_root -ov -format UDZO RealTracks-macOS.dmg
           ls -lh RealTracks-macOS.dmg
 

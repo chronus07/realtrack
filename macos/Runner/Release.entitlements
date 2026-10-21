@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Desabilita App Sandbox para distribuição fora da Mac App Store (DMG Direto) -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- Permissões de Rede (Entrada e Saída) para comunicação com o Supabase e download dos Stems -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- Permissão de Áudio e Hardware CoreAudio -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- Permissão de Acesso a Arquivos locais para importação e cache de áudio -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+</dict>
+</plist>
