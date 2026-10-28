@@ -181,6 +181,13 @@ class SupabaseService {
       if (createdSongId != null) {
         try {
           await client.from('songs').delete().eq('id', createdSongId);
+          final objects = await client.storage
+              .from(AppConfig.audioBucketName)
+              .list(path: 'songs/$createdSongId');
+          if (objects.isNotEmpty) {
+            final filePaths = objects.map((obj) => 'songs/$createdSongId/${obj.name}').toList();
+            await client.storage.from(AppConfig.audioBucketName).remove(filePaths);
+          }
         } catch (_) {}
       }
       debugPrint('Erro ao fazer upload da música: $e');
@@ -192,6 +199,20 @@ class SupabaseService {
   static Future<bool> deleteSongFromLibrary(String songId) async {
     if (!AppConfig.isConfigured) return false;
     try {
+      // 1. Remove os arquivos de áudio do Storage para não deixar lixo residual órfão
+      try {
+        final objects = await client.storage
+            .from(AppConfig.audioBucketName)
+            .list(path: 'songs/$songId');
+        if (objects.isNotEmpty) {
+          final filePaths = objects.map((obj) => 'songs/$songId/${obj.name}').toList();
+          await client.storage.from(AppConfig.audioBucketName).remove(filePaths);
+        }
+      } catch (storageError) {
+        debugPrint('Aviso ao excluir arquivos do storage: $storageError');
+      }
+
+      // 2. Remove os registros do banco de dados relacional
       await client.from('setlist_songs').delete().eq('song_id', songId);
       await client.from('song_stems').delete().eq('song_id', songId);
       await client.from('songs').delete().eq('id', songId);
