@@ -1098,8 +1098,10 @@ class AudioEngine extends ChangeNotifier {
       // 2. Transposição ativa (_pitchOffset != 0):
       if (!kIsWeb && isMulti) {
         // MULTITRACK EM PLATAFORMAS NATIVAS (Android, iOS, macOS, Windows):
-        // Aplica o pitch shift INDIVIDUALMENTE apenas nas faixas musicais da banda (!isCueTrack).
-        // Faixas de CUE (Click e Guia) NUNCA recebem filtro, mantendo o tom e a voz 100% naturais!
+        // Aplica o pitch shift em TODAS as faixas para garantir 100% DE SINCRONISMO (mesma latência de buffer FFT).
+        // - Nas faixas de CUE (Click e Guia): fator = 1.0 (neutro: tom 100% original, sem alteração de tom).
+        // - Nas faixas musicais da banda: fator = transposição calculada.
+        // Desta forma, o Click e a Guia NUNCA sofrem alteração de tom e NUNCA dessincronizam da banda!
         bool anyStemFiltered = false;
 
         for (final stem in song.stems) {
@@ -1115,28 +1117,21 @@ class AudioEngine extends ChangeNotifier {
               stem.name.toLowerCase().contains('count');
 
           final handle = _stemHandles[stem.id];
-          if (isCueTrack) {
-            // Click e Guia: garante que o filtro esteja desativado para som 100% natural
-            try {
-              if (source.filters.pitchShiftFilter.isActive) {
-                source.filters.pitchShiftFilter.deactivate();
-              }
-            } catch (_) {}
-          } else {
-            // Instrumentos e vozes da banda
-            try {
-              if (!source.filters.pitchShiftFilter.isActive) {
-                source.filters.pitchShiftFilter.activate();
-              }
-              if (handle != null) {
-                source.filters.pitchShiftFilter.shift(soundHandle: handle).value = factor;
-              } else {
-                source.filters.pitchShiftFilter.shift().value = factor;
-              }
-              anyStemFiltered = true;
-            } catch (e) {
-              debugPrint('Aviso ao aplicar pitchShiftFilter no stem ${stem.name}: $e');
+          // Click e Guia usam fator 1.0 (tom original, mas com o mesmo buffer delay para sincronismo perfeito)
+          final double stemFactor = isCueTrack ? 1.0 : factor;
+
+          try {
+            if (!source.filters.pitchShiftFilter.isActive) {
+              source.filters.pitchShiftFilter.activate();
             }
+            if (handle != null) {
+              source.filters.pitchShiftFilter.shift(soundHandle: handle).value = stemFactor;
+            } else {
+              source.filters.pitchShiftFilter.shift().value = stemFactor;
+            }
+            anyStemFiltered = true;
+          } catch (e) {
+            debugPrint('Aviso ao aplicar pitchShiftFilter no stem ${stem.name}: $e');
           }
         }
 
