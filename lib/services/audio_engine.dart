@@ -1073,34 +1073,80 @@ class AudioEngine extends ChangeNotifier {
     try {
       if (!SoLoud.instance.isInitialized) return;
 
+      final song = currentSong;
       final factor = pow(2.0, _pitchOffset / 12.0).toDouble();
+      final bool isMulti = song != null && song.isMultiTrack && song.stems.length > 1;
 
-      // Desativa quaisquer filtros individuais legados nos stems para garantir 0% de sobrecarga
-      for (final source in _stemSources.values) {
-        try {
-          if (!kIsWeb && source.filters.pitchShiftFilter.isActive) {
-            source.filters.pitchShiftFilter.deactivate();
-          }
-        } catch (_) {}
-      }
-
-      // 1. Tom original (0 semitons): desativa filtro para áudio 100% puro e sem processamento DSP
+      // 1. Tom original (0 semitons): desativa todos os filtros para áudio 100% puro e sem processamento DSP
       if (_pitchOffset == 0) {
         try {
           if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
             SoLoud.instance.filters.pitchShiftFilter.deactivate();
           }
         } catch (_) {}
+
+        for (final source in _stemSources.values) {
+          try {
+            if (!kIsWeb && source.filters.pitchShiftFilter.isActive) {
+              source.filters.pitchShiftFilter.deactivate();
+            }
+          } catch (_) {}
+        }
         return;
       }
 
       // 2. Transposição ativa (_pitchOffset != 0):
-      // Usa o filtro no mixer Master global do SoLoud em TODAS as plataformas (Web, Android, iOS, Windows, Mac).
-      // Vantagens arquiteturais críticas:
-      // a) Processa apenas 1 único filtro FFT na saída já somada, reduzindo o uso de CPU de 100% para < 1% no celular.
-      // b) Elimina completamente os travamentos, estalos e engasgos no Android ("todo travado").
-      // c) Dessincronização entre pistas é FISICAMENTE IMPOSSÍVEL porque os stems são mixados juntos na saída antes do filtro.
-      // d) Click, Guia e Banda mantêm 100% de alinhamento de fase e precisão milimétrica.
+      if (!kIsWeb && isMulti) {
+        // MULTITRACK EM PLATAFORMAS NATIVAS (Android, iOS, macOS, Windows):
+        // Aplica o pitch shift INDIVIDUALMENTE apenas nas faixas musicais da banda (!isCueTrack).
+        // Faixas de CUE (Click e Guia) NUNCA recebem filtro, mantendo o tom e a voz 100% naturais!
+        bool anyStemFiltered = false;
+
+        for (final stem in song.stems) {
+          final source = _stemSources[stem.id];
+          if (source == null) continue;
+
+          final bool isCueTrack = stem.isCue ||
+              stem.name.toLowerCase().contains('click') ||
+              stem.name.toLowerCase().contains('metronomo') ||
+              stem.name.toLowerCase().contains('metronome') ||
+              stem.name.toLowerCase().contains('guia') ||
+              stem.name.toLowerCase().contains('guide') ||
+              stem.name.toLowerCase().contains('count');
+
+          if (isCueTrack) {
+            // Click e Guia: garante que o filtro esteja desativado para som 100% natural
+            try {
+              if (source.filters.pitchShiftFilter.isActive) {
+                source.filters.pitchShiftFilter.deactivate();
+              }
+            } catch (_) {}
+          } else {
+            // Instrumentos e vozes da banda
+            try {
+              if (!source.filters.pitchShiftFilter.isActive) {
+                source.filters.pitchShiftFilter.activate();
+              }
+              source.filters.pitchShiftFilter.shift.value = factor;
+              anyStemFiltered = true;
+            } catch (e) {
+              debugPrint('Aviso ao aplicar pitchShiftFilter no stem ${stem.name}: $e');
+            }
+          }
+        }
+
+        if (anyStemFiltered) {
+          // Desativa o filtro Master global para não afetar o Click e a Guia
+          try {
+            if (SoLoud.instance.filters.pitchShiftFilter.isActive) {
+              SoLoud.instance.filters.pitchShiftFilter.deactivate();
+            }
+          } catch (_) {}
+          return;
+        }
+      }
+
+      // 3. Fallback (Single Track ou Web): usa o filtro no mixer Master global do SoLoud
       try {
         if (!SoLoud.instance.filters.pitchShiftFilter.isActive) {
           SoLoud.instance.filters.pitchShiftFilter.activate();
