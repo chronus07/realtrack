@@ -1114,6 +1114,7 @@ class AudioEngine extends ChangeNotifier {
               stem.name.toLowerCase().contains('guide') ||
               stem.name.toLowerCase().contains('count');
 
+          final handle = _stemHandles[stem.id];
           if (isCueTrack) {
             // Click e Guia: garante que o filtro esteja desativado para som 100% natural
             try {
@@ -1127,7 +1128,11 @@ class AudioEngine extends ChangeNotifier {
               if (!source.filters.pitchShiftFilter.isActive) {
                 source.filters.pitchShiftFilter.activate();
               }
-              source.filters.pitchShiftFilter.shift.value = factor;
+              if (handle != null) {
+                source.filters.pitchShiftFilter.shift(soundHandle: handle).value = factor;
+              } else {
+                source.filters.pitchShiftFilter.shift().value = factor;
+              }
               anyStemFiltered = true;
             } catch (e) {
               debugPrint('Aviso ao aplicar pitchShiftFilter no stem ${stem.name}: $e');
